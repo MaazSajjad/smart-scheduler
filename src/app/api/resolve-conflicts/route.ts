@@ -16,6 +16,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Ensure API key exists in production; return 500 if missing
+    if (!process.env.GROQ_API_KEY) {
+      return NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 500 })
+    }
+
     const prompt = `
 Analyze these scheduling conflicts and suggest resolution strategies:
 

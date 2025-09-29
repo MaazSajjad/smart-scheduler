@@ -48,6 +48,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Ensure API key exists in production; return 500 if missing
+    if (!groqApiKey) {
+      return NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 500 })
+    }
+
     const prompt = `
 You are an academic timetable optimizer. Generate a schedule for level ${level} students.
 
