@@ -101,6 +101,7 @@ export function Sidebar({ className }: SidebarProps) {
       case 'scheduling_committee':
         return [
           ...baseItems,
+          { name: 'Generate All Schedules', href: '/committee/generate-all', icon: Calendar },
           { name: 'Generate Schedule', href: '/committee/generate', icon: PlusCircle },
           { name: 'Edit Schedule', href: '/committee/edit', icon: Edit3 },
           { name: 'Manage Rules', href: '/committee/rules', icon: Settings },

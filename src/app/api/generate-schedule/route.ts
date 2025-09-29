@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Groq from 'groq-sdk'
 
+const groqApiKey = process.env.GROQ_API_KEY
+
+if (!groqApiKey) {
+  console.error('GROQ_API_KEY is not set in environment variables')
+}
+
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY!,
+  apiKey: groqApiKey!,
 })
 
 export interface ScheduleRecommendation {
@@ -45,35 +51,50 @@ export async function POST(request: NextRequest) {
     const prompt = `
 You are an academic timetable optimizer. Generate a schedule for level ${level} students.
 
-Constraints:
+CRITICAL CONSTRAINTS:
+- NO CLASSES BEFORE 12:00 PM (afternoon only: 12:00-17:00)
+- NO CLASSES ON FRIDAY (Monday-Thursday only)
+- Available days: Monday, Tuesday, Wednesday, Thursday only
+- Available time slots: 12:00-17:00 (afternoon only)
+- Each section should have 20-25 students maximum
+- NO DUPLICATE COURSES in the same schedule
+
+Course Requirements:
 - Students per course: ${JSON.stringify(constraints.students_per_course)}
-- Blocked slots: ${JSON.stringify(constraints.blocked_slots)}
 - Available rooms: ${JSON.stringify(constraints.available_rooms)}
 - Rules: ${JSON.stringify(constraints.rules)}
-- Objectives: ${JSON.stringify(constraints.objective_priorities)}
+
+Generate sections for FLEXIBLE courses only (fixed courses are handled separately).
+Focus on courses that are NOT fixed/required.
 
 Return a JSON array of sections with fields: course_code, section_label, timeslot (day, start, end), room, allocated_student_ids, justification, confidence_score.
-
-Ensure no time conflicts, respect room capacities, and provide a short justification for each section.
 
 Example response format:
 [
   {
-    "course_code": "CS301",
+    "course_code": "CS2EL1",
     "section_label": "A",
     "timeslot": {
       "day": "Monday",
-      "start": "09:00",
-      "end": "10:30"
+      "start": "12:00",
+      "end": "13:30"
     },
     "room": "A101",
-    "allocated_student_ids": ["student1", "student2"],
-    "justification": "Optimal time slot with no conflicts",
+    "allocated_student_ids": ["student1", "student2", "student3"],
+    "justification": "Afternoon slot avoiding morning constraint",
     "confidence_score": 0.95
   }
 ]
+
+IMPORTANT: 
+- Only return flexible/elective courses
+- Do NOT include fixed courses like CS101, MATH101, ENG101
+- ALL classes must be scheduled AFTER 12:00 PM
+- NO duplicates of the same course code
     `
 
+    console.log('Sending request to Groq with constraints:', constraints)
+    
     const completion = await groq.chat.completions.create({
       messages: [
         {
@@ -85,20 +106,40 @@ Example response format:
           content: prompt
         }
       ],
-      model: "openai/gpt-oss-20b",
+      model: "llama-3.1-8b-instant", // Using a working model
       temperature: 0.3,
     })
 
+    console.log('Groq response received:', completion)
+
     const content = completion.choices[0]?.message?.content || ""
+    console.log('Groq content:', content)
     
     // Parse the JSON response
-    const recommendations = JSON.parse(content) as ScheduleRecommendation[]
+    let recommendations: ScheduleRecommendation[]
+    try {
+      recommendations = JSON.parse(content) as ScheduleRecommendation[]
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError)
+      console.error('Raw content:', content)
+      // Return empty array if parsing fails
+      recommendations = []
+    }
     
     return NextResponse.json({ recommendations })
   } catch (error) {
     console.error('Error generating schedule:', error)
+    console.error('Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      name: error instanceof Error ? error.name : undefined
+    })
+    
     return NextResponse.json(
-      { error: 'Failed to generate schedule recommendation' },
+      { 
+        error: 'Failed to generate schedule recommendation',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     )
   }

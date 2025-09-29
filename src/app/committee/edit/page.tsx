@@ -61,6 +61,8 @@ export default function EditSchedulePage() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingSection, setEditingSection] = useState<ScheduleSection | null>(null)
   const [availableRooms, setAvailableRooms] = useState<string[]>([])
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     loadSchedules()
@@ -103,28 +105,64 @@ export default function EditSchedulePage() {
       // Ensure each section has a unique ID
       const sectionsWithIds = schedule.sections.map((section, index) => ({
         ...section,
-        id: section.id || `section-${scheduleId}-${index}`
+        id: section.id || `section-${scheduleId}-${index}-${Date.now()}`
       }))
+      console.log('Loaded sections with IDs:', sectionsWithIds)
       setSections(sectionsWithIds)
     }
   }
 
   const handleEditSection = (section: ScheduleSection) => {
-    setEditingSection(section)
+    // Ensure section has an ID
+    const sectionWithId = {
+      ...section,
+      id: section.id || `section-${sections.indexOf(section)}`
+    }
+    console.log('Editing section:', sectionWithId)
+    setEditingSection(sectionWithId)
     setIsEditDialogOpen(true)
   }
 
   const handleSaveSection = (updatedSection: ScheduleSection) => {
     setSections(prev => 
-      prev.map(s => (s.id || `section-${prev.indexOf(s)}`) === (updatedSection.id || `section-${prev.indexOf(s)}`) ? updatedSection : s)
+      prev.map((s, index) => {
+        const currentId = s.id || `section-${index}`
+        const updatedId = updatedSection.id || `section-${index}`
+        return currentId === updatedId ? updatedSection : s
+      })
     )
     setIsEditDialogOpen(false)
     setEditingSection(null)
+    setSuccess(`Section ${updatedSection.course_code} - ${updatedSection.section_label} updated successfully`)
   }
 
-  const handleDeleteSection = (sectionId: string) => {
-    if (confirm('Are you sure you want to delete this section?')) {
-      setSections(prev => prev.filter((s, index) => (s.id || `section-${index}`) !== sectionId))
+  const handleDeleteSection = (sectionId: string | undefined) => {
+    console.log('Attempting to delete section with ID:', sectionId)
+    console.log('Current sections:', sections)
+    
+    if (!sectionId) {
+      console.error('Cannot delete section: no ID provided')
+      return
+    }
+    
+    const sectionToDelete = sections.find((s, index) => {
+      const currentId = s.id || `section-${index}`
+      return currentId === sectionId
+    })
+    
+    if (!sectionToDelete) {
+      console.error('Section not found for deletion')
+      return
+    }
+    
+    console.log('Found section to delete:', sectionToDelete)
+    
+    if (confirm(`Are you sure you want to delete section ${sectionToDelete.course_code} - ${sectionToDelete.section_label}?`)) {
+      setSections(prev => prev.filter((s, index) => {
+        const currentId = s.id || `section-${index}`
+        return currentId !== sectionId
+      }))
+      setSuccess(`Section ${sectionToDelete.course_code} - ${sectionToDelete.section_label} deleted successfully`)
     }
   }
 
@@ -149,6 +187,32 @@ export default function EditSchedulePage() {
       setError('Failed to save schedule: ' + error.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleDeleteSchedule = async () => {
+    if (!selectedSchedule) return
+
+    try {
+      setDeleting(true)
+      setError('')
+      
+      // Delete the schedule
+      await ScheduleService.deleteSchedule(selectedSchedule.id)
+      
+      setSuccess('Schedule deleted successfully!')
+      setIsDeleteDialogOpen(false)
+      
+      // Clear selected schedule and sections
+      setSelectedSchedule(null)
+      setSections([])
+      
+      // Reload schedules to get updated data
+      await loadSchedules()
+    } catch (error: any) {
+      setError('Failed to delete schedule: ' + error.message)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -214,6 +278,16 @@ export default function EditSchedulePage() {
               )}
               Save Changes
             </Button>
+            {selectedSchedule && (
+              <Button 
+                variant="destructive" 
+                onClick={() => setIsDeleteDialogOpen(true)}
+                disabled={saving || deleting}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Schedule
+              </Button>
+            )}
           </div>
         </div>
 
@@ -232,7 +306,7 @@ export default function EditSchedulePage() {
                 <SelectContent>
                   {schedules.map((schedule) => (
                     <SelectItem key={schedule.id} value={schedule.id}>
-                      Level {schedule.level} - {schedule.semester} ({schedule.sections.length} sections)
+                      Level {schedule.level} - {schedule.semester} ({schedule.sections.length} sections) - {schedule.status.toUpperCase()}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -242,8 +316,17 @@ export default function EditSchedulePage() {
                   <Badge variant="secondary">
                     {selectedSchedule.sections.length} Sections
                   </Badge>
-                  <Badge variant={selectedSchedule.status === 'approved' ? 'default' : 'secondary'}>
-                    {selectedSchedule.status}
+                  <Badge variant="outline">
+                    {selectedSchedule.conflicts} Conflicts
+                  </Badge>
+                  <Badge variant="outline">
+                    {selectedSchedule.efficiency}% Efficiency
+                  </Badge>
+                  <Badge 
+                    variant={selectedSchedule.status === 'approved' ? 'default' : 'secondary'}
+                    className={selectedSchedule.status === 'approved' ? 'bg-green-500' : ''}
+                  >
+                    {selectedSchedule.status.toUpperCase()}
                   </Badge>
                 </div>
               )}
@@ -382,7 +465,7 @@ export default function EditSchedulePage() {
                         size="sm"
                         variant="outline"
                         className="text-red-600 hover:text-red-700"
-                        onClick={() => handleDeleteSection(section.id)}
+                        onClick={() => handleDeleteSection(section.id || `section-${sections.indexOf(section)}`)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -409,6 +492,52 @@ export default function EditSchedulePage() {
                 onCancel={() => setIsEditDialogOpen(false)}
               />
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Schedule Confirmation Dialog */}
+        <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete Schedule</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete this schedule? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-center">
+                  <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
+                  <div>
+                    <h4 className="font-medium text-red-800">Warning</h4>
+                    <p className="text-sm text-red-700 mt-1">
+                      This will permanently delete the schedule for Level {selectedSchedule?.level} - {selectedSchedule?.semester}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end space-x-2">
+              <Button 
+                variant="outline" 
+                onClick={() => setIsDeleteDialogOpen(false)}
+                disabled={deleting}
+              >
+                Cancel
+              </Button>
+              <Button 
+                variant="destructive" 
+                onClick={handleDeleteSchedule}
+                disabled={deleting}
+              >
+                {deleting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4 mr-2" />
+                )}
+                {deleting ? 'Deleting...' : 'Delete Schedule'}
+              </Button>
+            </div>
           </DialogContent>
         </Dialog>
       </div>
