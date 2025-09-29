@@ -2,6 +2,7 @@
 
 import { useAuth } from '@/contexts/AuthContext'
 import { MainLayout } from '@/components/layout/MainLayout'
+import { generateSampleTimetablePDF } from '@/lib/pdfGenerator'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,21 +34,8 @@ export default function DashboardPage() {
   }
 
   const handleDownloadSchedule = () => {
-    // Mock download functionality
-    const scheduleData = {
-      student: user?.email,
-      schedule: "Sample schedule data",
-      timestamp: new Date().toISOString()
-    }
-    
-    const dataStr = JSON.stringify(scheduleData, null, 2)
-    const dataBlob = new Blob([dataStr], { type: 'application/json' })
-    const url = URL.createObjectURL(dataBlob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'my-schedule.json'
-    link.click()
-    URL.revokeObjectURL(url)
+    // Generate PDF timetable
+    generateSampleTimetablePDF()
   }
 
   const handleViewSchedule = () => {
@@ -188,7 +176,7 @@ export default function DashboardPage() {
                     onClick={handleDownloadSchedule}
                   >
                     <Download className="mr-2 h-4 w-4" />
-                    Download Schedule PDF
+                    Download Timetable PDF
                   </Button>
                 </CardContent>
               </Card>

@@ -120,10 +120,18 @@ IMPORTANT:
     const content = completion.choices[0]?.message?.content || ""
     console.log('Groq content:', content)
     
-    // Parse the JSON response
+    // Parse the JSON response (handle markdown code blocks)
     let recommendations: ScheduleRecommendation[]
     try {
-      recommendations = JSON.parse(content) as ScheduleRecommendation[]
+      // Clean the content to remove markdown code blocks
+      let cleanContent = content.trim()
+      if (cleanContent.startsWith('```json')) {
+        cleanContent = cleanContent.replace(/^```json\s*/, '').replace(/\s*```$/, '')
+      } else if (cleanContent.startsWith('```')) {
+        cleanContent = cleanContent.replace(/^```\s*/, '').replace(/\s*```$/, '')
+      }
+      
+      recommendations = JSON.parse(cleanContent) as ScheduleRecommendation[]
     } catch (parseError) {
       console.error('JSON parse error:', parseError)
       console.error('Raw content:', content)

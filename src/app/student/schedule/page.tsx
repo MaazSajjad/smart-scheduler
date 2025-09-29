@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
+import { generateTimetablePDF } from '@/lib/pdfGenerator'
+import { TimetableView, CompactTimetableView } from '@/components/ui/TimetableView'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -216,22 +218,32 @@ export default function StudentSchedulePage() {
   }
 
   const handleDownloadPDF = () => {
-    // Create a simple PDF-like download
-    const scheduleData = {
-      student: schedule.student,
-      courses: schedule.courses,
-      totalCredits: schedule.totalCredits,
-      generatedAt: new Date().toISOString()
-    }
-    
-    const dataStr = JSON.stringify(scheduleData, null, 2)
-    const dataBlob = new Blob([dataStr], { type: 'application/json' })
-    const url = URL.createObjectURL(dataBlob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `schedule-${schedule.student.studentNumber}.json`
-    link.click()
-    URL.revokeObjectURL(url)
+    // Convert courses to timetable format
+    const timetableEntries = schedule.courses.flatMap(course => {
+      // Handle multiple days (e.g., "Monday, Wednesday")
+      const days = course.time.split(', ').filter(day => day.trim() !== 'TBA')
+      
+      return days.map(day => ({
+        course_code: course.code,
+        section_label: course.section,
+        timeslot: {
+          day: day.trim(),
+          start: course.startTime,
+          end: course.endTime
+        },
+        room: course.room,
+        instructor_id: course.instructor,
+        student_count: 25, // Default value
+        capacity: 30 // Default value
+      }))
+    })
+
+    // Generate PDF with student info
+    generateTimetablePDF(timetableEntries, {
+      name: schedule.student.name,
+      level: schedule.student.level,
+      semester: schedule.student.semester
+    })
   }
 
   const handlePrint = () => {
@@ -263,7 +275,7 @@ export default function StudentSchedulePage() {
           <div className="flex space-x-2">
             <Button variant="outline" onClick={handleDownloadPDF} disabled={loading}>
               <Download className="mr-2 h-4 w-4" />
-              Download PDF
+              Download Timetable PDF
             </Button>
             <Button variant="outline" onClick={handlePrint} disabled={loading}>
               <Printer className="mr-2 h-4 w-4" />
@@ -293,115 +305,75 @@ export default function StudentSchedulePage() {
           </CardContent>
         </Card>
 
-        {/* Schedule Grid */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Weekly Schedule</CardTitle>
-            <CardDescription>Your class timetable for this semester</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                <span className="ml-2">Loading schedule...</span>
-              </div>
-            ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr>
-                    <th className="w-20 p-2 text-left text-sm font-medium text-gray-600">Time</th>
-                    {days.map(day => (
-                      <th key={day} className="p-2 text-center text-sm font-medium text-gray-600 min-w-32">
-                        {day}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {timeSlots.map(slot => (
-                    <tr key={slot.time} className="border-t">
-                      <td className="p-2 text-sm text-gray-600">{slot.label}</td>
-                      {days.map(day => {
-                        const course = getCourseAtTime(day, slot.time)
-                        return (
-                          <td key={`${day}-${slot.time}`} className="p-1">
-                            {course ? (
-                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-xs">
-                                <div className="font-medium text-blue-900">{course.code}</div>
-                                <div className="text-blue-700">{course.title}</div>
-                                <div className="text-blue-600">{course.section}</div>
-                                <div className="flex items-center mt-1">
-                                  <MapPin className="h-3 w-3 mr-1" />
-                                  {course.room}
-                                </div>
-                                <div className="flex items-center">
-                                  <User className="h-3 w-3 mr-1" />
-                                  {course.instructor}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="h-16"></div>
-                            )}
-                          </td>
-                        )
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Schedule Grid - Clean PDF-style display */}
+        {loading ? (
+          <Card>
+            <CardContent className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <span className="ml-2">Loading schedule...</span>
+            </CardContent>
+          </Card>
+        ) : schedule.courses.length > 0 ? (
+          <TimetableView
+            schedule={schedule.courses.flatMap(course => {
+              // Handle multiple days (e.g., "Monday, Wednesday")
+              const days = course.time.split(', ').filter(day => day.trim() !== 'TBA')
+              
+              return days.map(day => ({
+                course_code: course.code,
+                section_label: course.section,
+                timeslot: {
+                  day: day.trim(),
+                  start: course.startTime,
+                  end: course.endTime
+                },
+                room: course.room,
+                instructor_id: course.instructor,
+                student_count: 25, // Default value
+                capacity: 30 // Default value
+              }))
+            })}
+            title="My Weekly Schedule"
+            studentInfo={{
+              name: schedule.student.name,
+              level: schedule.student.level,
+              semester: schedule.student.semester
+            }}
+          />
+        ) : (
+          <Card>
+            <CardContent className="text-center py-8">
+              <Calendar className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No Courses Enrolled</h3>
+              <p className="text-gray-600">You haven't been enrolled in any courses yet. Please contact your academic advisor.</p>
+            </CardContent>
+          </Card>
+        )}
 
-        {/* Course List */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Course Details</CardTitle>
-            <CardDescription>Detailed information about your enrolled courses</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {schedule.courses.length === 0 ? (
-              <div className="text-center py-8">
-                <Calendar className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                <h3 className="text-lg font-medium text-gray-900 mb-2">No Courses Enrolled</h3>
-                <p className="text-gray-600">You haven't been enrolled in any courses yet. Please contact your academic advisor.</p>
-              </div>
-            ) : (
-            <div className="space-y-4">
-              {schedule.courses.map((course, index) => (
-                <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-3">
-                      <h4 className="font-medium">{course.code} - {course.title}</h4>
-                      <Badge variant="secondary">Section {course.section}</Badge>
-                      <Badge variant="outline">{course.credits} credits</Badge>
-                    </div>
-                    <div className="mt-2 flex items-center space-x-4 text-sm text-gray-600">
-                      <div className="flex items-center">
-                        <Clock className="h-4 w-4 mr-1" />
-                        {course.time} {course.startTime} - {course.endTime}
-                      </div>
-                      <div className="flex items-center">
-                        <MapPin className="h-4 w-4 mr-1" />
-                        {course.room}
-                      </div>
-                      <div className="flex items-center">
-                        <User className="h-4 w-4 mr-1" />
-                        {course.instructor}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center">
-                    <CheckCircle className="h-5 w-5 text-green-600" />
-                  </div>
-                </div>
-              ))}
-            </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Course List - Compact View */}
+        {schedule.courses.length > 0 && (
+          <CompactTimetableView
+            schedule={schedule.courses.flatMap(course => {
+              // Handle multiple days (e.g., "Monday, Wednesday")
+              const days = course.time.split(', ').filter(day => day.trim() !== 'TBA')
+              
+              return days.map(day => ({
+                course_code: course.code,
+                section_label: course.section,
+                timeslot: {
+                  day: day.trim(),
+                  start: course.startTime,
+                  end: course.endTime
+                },
+                room: course.room,
+                instructor_id: course.instructor,
+                student_count: 25,
+                capacity: 30
+              }))
+            })}
+            title="Course Details"
+          />
+        )}
 
         {/* Conflicts Alert */}
         {schedule.conflicts.length > 0 && (

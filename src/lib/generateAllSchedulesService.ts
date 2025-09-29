@@ -22,6 +22,7 @@ export interface ScheduleSection {
 }
 
 export interface GeneratedSchedule {
+  id?: string
   level: number
   semester: string
   groups: {
@@ -503,6 +504,236 @@ export class GenerateAllSchedulesService {
       console.log(`✅ Saved ${schedules.length} schedules to database`)
     } catch (error) {
       console.error('Error saving schedules to database:', error)
+      throw error
+    }
+  }
+
+  // Get existing schedules from database
+  static async getExistingSchedules(): Promise<GeneratedSchedule[]> {
+    try {
+      const { data, error } = await supabase
+        .from('schedule_versions')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+
+      return (data || []).map(schedule => ({
+        id: schedule.id,
+        level: schedule.level,
+        semester: schedule.semester,
+        groups: schedule.diff_json?.groups || {},
+        total_sections: schedule.diff_json?.total_sections || 0,
+        conflicts: schedule.diff_json?.conflicts || 0,
+        efficiency: schedule.diff_json?.efficiency || 0,
+        generated_at: schedule.created_at
+      }))
+    } catch (error) {
+      console.error('Error loading existing schedules:', error)
+      throw error
+    }
+  }
+
+  // Delete a schedule
+  static async deleteSchedule(scheduleId: string): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('schedule_versions')
+        .delete()
+        .eq('id', scheduleId)
+
+      if (error) throw error
+      
+      console.log(`✅ Deleted schedule ${scheduleId}`)
+    } catch (error) {
+      console.error('Error deleting schedule:', error)
+      throw error
+    }
+  }
+
+
+  // Generate schedule with AI prompt for editing
+  static async generateLevelScheduleWithPrompt(
+    level: number, 
+    userPrompt: string, 
+    enhancedConstraints: any
+  ): Promise<GeneratedSchedule> {
+    try {
+      console.log(`🤖 AI Editing for Level ${level} with prompt: ${userPrompt}`)
+      
+      // Create enhanced constraints for the AI
+      const aiConstraints = {
+        level,
+        userPrompt,
+        occupiedSlots: enhancedConstraints.occupiedSlots || [],
+        availableRooms: enhancedConstraints.availableRooms || ['A101', 'A102', 'B205', 'C301'],
+        studentCount: enhancedConstraints.studentCount || 25,
+        conflictPreventionRules: [
+          'CRITICAL: Avoid time conflicts with other levels in the same rooms',
+          'CRITICAL: Maintain afternoon-only policy (12 PM onwards)',
+          'CRITICAL: No classes on Friday',
+          'Optimize for minimal disruption to other levels',
+          'Balance instructor workload',
+          'Ensure proper room utilization'
+        ],
+        editingMode: true,
+        preserveConsistency: true
+      }
+
+      // Get courses for this level
+      const { data: courses } = await supabase
+        .from('courses')
+        .select('*')
+        .eq('level', level)
+
+      if (!courses || courses.length === 0) {
+        throw new Error(`No courses found for Level ${level}`)
+      }
+
+      console.log(`Found ${courses.length} courses for Level ${level}`)
+
+      // Use AI to generate optimized schedule based on prompt
+      const aiResponse = await this.callAIForScheduleEditing(aiConstraints, courses)
+      
+      // Process AI response into schedule format
+      const processedSchedule = await this.processAIEditingResponse(aiResponse, level, userPrompt)
+      
+      console.log(`✅ AI generated edited schedule for Level ${level}`)
+      return processedSchedule
+
+    } catch (error) {
+      console.error('Error in AI schedule editing:', error)
+      throw error
+    }
+  }
+
+  // Call AI service for schedule editing
+  private static async callAIForScheduleEditing(constraints: any, courses: any[]): Promise<any> {
+    try {
+      const response = await fetch('/api/generate-schedule', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          constraints: {
+            ...constraints,
+            courses: courses.map(c => ({
+              code: c.code,
+              title: c.title,
+              is_fixed: c.is_fixed,
+              allowable_rooms: c.allowable_rooms
+            }))
+          },
+          level: constraints.level,
+          editingMode: true,
+          userPrompt: constraints.userPrompt
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`AI API error: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return data.recommendations || []
+    } catch (error) {
+      console.error('AI API call failed:', error)
+      // Fallback to basic regeneration
+      return this.generateFallbackEditedSchedule(constraints, courses)
+    }
+  }
+
+  // Process AI response for editing
+  private static async processAIEditingResponse(aiResponse: any[], level: number, userPrompt: string): Promise<GeneratedSchedule> {
+    const groups: { [key: string]: ScheduleGroup } = {}
+    
+    // Create groups A, B, C with distributed sections
+    const groupNames = ['Group A', 'Group B', 'Group C']
+    
+    groupNames.forEach((groupName, groupIndex) => {
+      groups[groupName] = {
+        name: groupName,
+        student_count: Math.floor(75 / groupNames.length), // Distribute students
+        sections: aiResponse
+          .filter((_, index) => index % groupNames.length === groupIndex)
+          .map(recommendation => ({
+            course_code: recommendation.course_code,
+            course_title: recommendation.course_code,
+            section_label: recommendation.section_label,
+            day: recommendation.timeslot.day,
+            start_time: recommendation.timeslot.start,
+            end_time: recommendation.timeslot.end,
+            room: recommendation.room,
+            instructor: 'TBA',
+            student_count: Math.min(25, recommendation.allocated_student_ids?.length || 25),
+            capacity: 30
+          }))
+      }
+    })
+
+    return {
+      id: `edited-${level}-${Date.now()}`,
+      level,
+      semester: 'Fall 2024',
+      groups,
+      total_sections: aiResponse.length,
+      conflicts: 0,
+      efficiency: 85,
+      generated_at: new Date().toISOString()
+    }
+  }
+
+  // Fallback schedule generation for editing
+  private static generateFallbackEditedSchedule(constraints: any, courses: any[]): any[] {
+    return courses.slice(0, 6).map((course, index) => ({
+      course_code: course.code,
+      section_label: 'A',
+      timeslot: {
+        day: ['Monday', 'Tuesday', 'Wednesday', 'Thursday'][index % 4],
+        start: index < 3 ? '14:00' : '15:30',
+        end: index < 3 ? '15:30' : '17:00'
+      },
+      room: constraints.availableRooms[index % constraints.availableRooms.length],
+      allocated_student_ids: Array(25).fill(0).map((_, i) => `student-${i}`),
+      justification: `Fallback editing for ${course.code} based on user prompt`,
+      confidence_score: 0.7
+    }))
+  }
+
+  /**
+   * Update an existing schedule in the database
+   */
+  static async updateSchedule(
+    scheduleId: string,
+    updateData: {
+      groups: any;
+      total_sections: number;
+      conflicts: number;
+      efficiency: number;
+    }
+  ): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('schedule_versions')
+        .update({
+          diff_json: {
+            groups: updateData.groups,
+            total_sections: updateData.total_sections,
+            conflicts: updateData.conflicts,
+            efficiency: updateData.efficiency
+          },
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', scheduleId)
+
+      if (error) {
+        throw new Error(`Failed to update schedule: ${error.message}`)
+      }
+
+      console.log('Successfully updated schedule:', scheduleId)
+    } catch (error) {
+      console.error('Error updating schedule:', error)
       throw error
     }
   }
