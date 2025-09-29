@@ -102,10 +102,10 @@ export default function EditSchedulePage() {
     const schedule = schedules.find(s => s.id === scheduleId)
     if (schedule) {
       setSelectedSchedule(schedule)
-      // Ensure each section has a unique ID
-      const sectionsWithIds = schedule.sections.map((section, index) => ({
-        ...section,
-        id: section.id || `section-${scheduleId}-${index}-${Date.now()}`
+      // Ensure each section has a unique ID (UI-only)
+      const sectionsWithIds: ScheduleSection[] = schedule.sections.map((section, index) => ({
+        ...(section as any),
+        id: `section-${scheduleId}-${index}-${Date.now()}`
       }))
       console.log('Loaded sections with IDs:', sectionsWithIds)
       setSections(sectionsWithIds)
@@ -114,8 +114,8 @@ export default function EditSchedulePage() {
 
   const handleEditSection = (section: ScheduleSection) => {
     // Ensure section has an ID
-    const sectionWithId = {
-      ...section,
+    const sectionWithId: ScheduleSection = {
+      ...(section as any),
       id: section.id || `section-${sections.indexOf(section)}`
     }
     console.log('Editing section:', sectionWithId)
@@ -128,7 +128,7 @@ export default function EditSchedulePage() {
       prev.map((s, index) => {
         const currentId = s.id || `section-${index}`
         const updatedId = updatedSection.id || `section-${index}`
-        return currentId === updatedId ? updatedSection : s
+        return currentId === updatedId ? ({ ...(updatedSection as any) } as ScheduleSection) : s
       })
     )
     setIsEditDialogOpen(false)

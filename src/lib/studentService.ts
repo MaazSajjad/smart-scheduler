@@ -1,6 +1,11 @@
 import { supabase } from './supabase'
 import { Student } from './supabase'
 
+// Returned rows include a joined users relation with email and role
+export interface StudentWithUser extends Student {
+  users?: { email?: string; role?: string }
+}
+
 export interface CreateStudentData {
   user_id: string
   student_number: string
@@ -13,7 +18,7 @@ export interface UpdateStudentData extends Partial<CreateStudentData> {
 }
 
 export class StudentService {
-  static async getAllStudents(): Promise<Student[]> {
+  static async getAllStudents(): Promise<StudentWithUser[]> {
     const { data, error } = await supabase
       .from('students')
       .select(`
@@ -24,10 +29,10 @@ export class StudentService {
       .order('student_number', { ascending: true })
 
     if (error) throw error
-    return data || []
+    return (data || []) as unknown as StudentWithUser[]
   }
 
-  static async getStudentById(id: string): Promise<Student | null> {
+  static async getStudentById(id: string): Promise<StudentWithUser | null> {
     const { data, error } = await supabase
       .from('students')
       .select(`
@@ -38,10 +43,10 @@ export class StudentService {
       .single()
 
     if (error) throw error
-    return data
+    return (data as unknown as StudentWithUser) || null
   }
 
-  static async createStudent(studentData: CreateStudentData): Promise<Student> {
+  static async createStudent(studentData: CreateStudentData): Promise<StudentWithUser> {
     const { data, error } = await supabase
       .from('students')
       .insert(studentData)
@@ -52,10 +57,10 @@ export class StudentService {
       .single()
 
     if (error) throw error
-    return data
+    return data as unknown as StudentWithUser
   }
 
-  static async updateStudent(studentData: UpdateStudentData): Promise<Student> {
+  static async updateStudent(studentData: UpdateStudentData): Promise<StudentWithUser> {
     const { id, ...updateData } = studentData
     const { data, error } = await supabase
       .from('students')
@@ -68,7 +73,7 @@ export class StudentService {
       .single()
 
     if (error) throw error
-    return data
+    return data as unknown as StudentWithUser
   }
 
   static async deleteStudent(id: string): Promise<void> {
@@ -80,7 +85,7 @@ export class StudentService {
     if (error) throw error
   }
 
-  static async getStudentsByLevel(level: number): Promise<Student[]> {
+  static async getStudentsByLevel(level: number): Promise<StudentWithUser[]> {
     const { data, error } = await supabase
       .from('students')
       .select(`
@@ -91,6 +96,6 @@ export class StudentService {
       .order('student_number', { ascending: true })
 
     if (error) throw error
-    return data || []
+    return (data || []) as unknown as StudentWithUser[]
   }
 }

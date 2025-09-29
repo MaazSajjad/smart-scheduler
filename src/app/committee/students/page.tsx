@@ -13,6 +13,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { StudentService, CreateStudentData } from '@/lib/studentService'
 import { Student } from '@/lib/supabase'
+
+// Extend Student with optional joined users relation for UI
+interface StudentWithUser extends Student {
+  users?: { email?: string; role?: string }
+}
 import { 
   GraduationCap, 
   Plus, 
@@ -29,12 +34,12 @@ import {
 } from 'lucide-react'
 
 export default function StudentManagementPage() {
-  const [students, setStudents] = useState<Student[]>([])
+  const [students, setStudents] = useState<StudentWithUser[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [levelFilter, setLevelFilter] = useState('all')
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
-  const [editingStudent, setEditingStudent] = useState<Student | null>(null)
+  const [editingStudent, setEditingStudent] = useState<StudentWithUser | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [formLoading, setFormLoading] = useState(false)
@@ -56,7 +61,7 @@ export default function StudentManagementPage() {
     try {
       setLoading(true)
       const data = await StudentService.getAllStudents()
-      setStudents(data)
+      setStudents(data as unknown as StudentWithUser[])
     } catch (error: any) {
       setError('Failed to load students: ' + error.message)
     } finally {
@@ -104,7 +109,7 @@ export default function StudentManagementPage() {
     }
   }
 
-  const handleEdit = (student: Student) => {
+  const handleEdit = (student: StudentWithUser) => {
     setEditingStudent(student)
     setFormData({
       user_id: student.user_id,
@@ -126,9 +131,12 @@ export default function StudentManagementPage() {
   }
 
   const filteredStudents = students.filter(student => {
-    const matchesSearch = student.student_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         student.users?.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         (student.contact && student.contact.toLowerCase().includes(searchTerm.toLowerCase()))
+    const q = searchTerm.toLowerCase()
+    const emailLower = (student.users?.email || '').toLowerCase()
+    const contactLower = (student.contact || '').toLowerCase()
+    const matchesSearch = student.student_number.toLowerCase().includes(q) ||
+                         emailLower.includes(q) ||
+                         contactLower.includes(q)
     const matchesLevel = levelFilter === 'all' || student.level.toString() === levelFilter
     return matchesSearch && matchesLevel
   })
