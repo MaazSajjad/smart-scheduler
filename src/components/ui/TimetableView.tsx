@@ -22,6 +22,7 @@ interface TimetableViewProps {
   studentInfo?: {
     name?: string
     level?: number
+    studentNumber?: string
   }
 }
 
@@ -60,6 +61,7 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
         {studentInfo && (
           <div className="text-sm text-gray-600 space-y-1">
             {studentInfo.name && <p className="font-medium">Student: {studentInfo.name}</p>}
+            {studentInfo.studentNumber && <p>Student Number: {studentInfo.studentNumber}</p>}
             {studentInfo.level && <p>Level: {studentInfo.level}</p>}
           </div>
         )}

@@ -34,7 +34,7 @@ const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 
 export function generateTimetablePDF(
   schedule: TimetableEntry[],
-  studentInfo: { name?: string; level?: number } = {}
+  studentInfo: { name?: string; level?: number; studentNumber?: string; semester?: string } = {}
 ): void {
   const doc = new jsPDF('landscape', 'mm', 'a4')
   
@@ -51,8 +51,16 @@ export function generateTimetablePDF(
     doc.text(`Student: ${studentInfo.name}`, 20, yPos)
     yPos += 7
   }
+  if (studentInfo.studentNumber) {
+    doc.text(`Student Number: ${studentInfo.studentNumber}`, 20, yPos)
+    yPos += 7
+  }
   if (studentInfo.level) {
     doc.text(`Level: ${studentInfo.level}`, 20, yPos)
+    yPos += 7
+  }
+  if (studentInfo.semester) {
+    doc.text(`Semester: ${studentInfo.semester}`, 20, yPos)
     yPos += 7
   }
   
