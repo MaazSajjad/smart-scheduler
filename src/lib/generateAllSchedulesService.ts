@@ -24,7 +24,7 @@ export interface ScheduleSection {
 export interface GeneratedSchedule {
   id?: string
   level: number
-  semester: string
+  semester?: string
   groups: {
     [key: string]: ScheduleGroup
   }
@@ -74,12 +74,19 @@ export class GenerateAllSchedulesService {
   }
 
   // Generate schedule for a specific level using AI
-  static async generateLevelSchedule(level: number): Promise<GeneratedSchedule> {
+  static async generateLevelSchedule(level: number, specificGroups?: string[], skipDatabaseSave?: boolean): Promise<GeneratedSchedule> {
     try {
       console.log(`🤖 Generating AI-powered schedule for Level ${level}...`)
+      if (skipDatabaseSave) {
+        console.log(`⚠️ Skip database save mode - will return data only`)
+      }
 
       // Initialize global room tracking
       this.initializeGlobalRoomTracking()
+
+      // STRICT: Load ALL existing schedules from other levels to prevent ANY overlap
+      const occupiedSlots = await this.getAllOccupiedSlotsFromOtherLevels(level)
+      console.log(`🔒 STRICT MODE: Loaded ${occupiedSlots.length} occupied time/room slots from other levels`)
 
       // Get courses for this level
       const { data: courses, error: coursesError } = await supabase
@@ -105,19 +112,47 @@ export class GenerateAllSchedulesService {
 
       console.log(`📚 Found ${courses.length} courses and ${students.length} students for Level ${level}`)
 
-      // Create groups (A, B, C)
-      const studentsPerGroup = Math.ceil(students.length / 3)
+      // Group students by their assigned group
+      const studentsByGroup = students.reduce((acc: any, student: any) => {
+        const group = student.student_group || 'A'
+        if (!acc[group]) acc[group] = []
+        acc[group].push(student)
+        return acc
+      }, {})
+
+      console.log(`📊 Students per group:`, Object.entries(studentsByGroup).map(([g, s]: [string, any]) => `${g}: ${s.length}`).join(', '))
+
+      // Create groups only for groups that have students (or specificGroups if provided)
       const groups: {
         [key: string]: {
           name: string
           student_count: number
           sections: ScheduleSection[]
         }
-      } = {
-        'Group A': { name: 'Group A', student_count: studentsPerGroup, sections: [] },
-        'Group B': { name: 'Group B', student_count: studentsPerGroup, sections: [] },
-        'Group C': { name: 'Group C', student_count: studentsPerGroup, sections: [] }
+      } = {}
+
+      const groupsToGenerate = specificGroups || Object.keys(studentsByGroup)
+      
+      for (const groupLetter of groupsToGenerate) {
+        const studentsInGroup = studentsByGroup[groupLetter] || []
+        
+        if (studentsInGroup.length === 0) {
+          console.warn(`⚠️ No students in Group ${groupLetter}, skipping schedule generation`)
+          continue
+        }
+
+        groups[`Group ${groupLetter}`] = {
+          name: `Group ${groupLetter}`,
+          student_count: studentsInGroup.length,
+          sections: []
+        }
       }
+
+      if (Object.keys(groups).length === 0) {
+        throw new Error(`No groups with students found for Level ${level}`)
+      }
+
+      console.log(`✅ Will generate schedules for groups: ${Object.keys(groups).join(', ')}`)
 
       // Generate schedule for each group using AI
       for (const [groupName, group] of Object.entries(groups)) {
@@ -133,7 +168,8 @@ export class GenerateAllSchedulesService {
           courses,
           group.student_count,
           groupName,
-          level
+          level,
+          occupiedSlots
         )
         
         group.sections = groupSchedule
@@ -146,8 +182,8 @@ export class GenerateAllSchedulesService {
       const efficiency = Math.min(100, Math.round((totalSections / (courses.length * 3)) * 100))
 
       const schedule: GeneratedSchedule = {
+        id: `level-${level}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         level,
-        semester: 'Fall 2024',
         groups,
         total_sections: totalSections,
         conflicts,
@@ -155,8 +191,46 @@ export class GenerateAllSchedulesService {
         generated_at: new Date().toISOString()
       }
 
-      console.log(`✅ Level ${level} schedule generated: ${totalSections} sections, ${conflicts} conflicts, ${efficiency}% efficiency`)
-      return schedule
+      console.log(`🔍 Created schedule object:`, JSON.stringify(schedule, null, 2))
+      console.log(`🔍 Schedule level: ${schedule.level} (type: ${typeof schedule.level})`)
+
+      // Check for inter-level conflicts and resolve them
+      const interLevelConflicts = await this.detectInterLevelConflicts(schedule)
+      console.log(`🔍 Detected ${interLevelConflicts} inter-level conflicts`)
+
+      let finalSchedule = schedule
+      if (interLevelConflicts > 0) {
+        console.log(`🔧 Resolving ${interLevelConflicts} inter-level conflicts...`)
+        finalSchedule = await this.resolveConflicts(schedule)
+        
+        // Recalculate conflicts after resolution
+        const resolvedConflicts = this.detectConflicts(finalSchedule.groups)
+        const resolvedInterLevelConflicts = await this.detectInterLevelConflicts(finalSchedule)
+        
+        finalSchedule = {
+          ...finalSchedule,
+          conflicts: resolvedConflicts + resolvedInterLevelConflicts,
+          efficiency: Math.max(0, efficiency - (interLevelConflicts * 5)) // Reduce efficiency for each conflict resolved
+        }
+        
+        console.log(`✅ Conflict resolution complete. Final conflicts: ${finalSchedule.conflicts}`)
+      }
+
+      // Save to database immediately and get the real UUID (unless skipping)
+      if (!skipDatabaseSave) {
+        const savedId = await this.saveSingleScheduleToDatabase(finalSchedule)
+        
+        // Update finalSchedule with the real UUID from database
+        if (savedId) {
+          finalSchedule.id = savedId
+        }
+
+        console.log(`✅ Level ${level} schedule generated and saved with ID ${savedId}: ${finalSchedule.total_sections} sections, ${finalSchedule.conflicts} conflicts, ${finalSchedule.efficiency}% efficiency`)
+      } else {
+        console.log(`✅ Level ${level} schedule generated (not saved): ${finalSchedule.total_sections} sections, ${finalSchedule.conflicts} conflicts, ${finalSchedule.efficiency}% efficiency`)
+      }
+      
+      return finalSchedule
 
     } catch (error) {
       console.error(`❌ Error generating schedule for Level ${level}:`, error)
@@ -211,7 +285,8 @@ export class GenerateAllSchedulesService {
     courses: any[],
     studentCount: number,
     groupName: string,
-    level: number
+    level: number,
+    occupiedSlots: Array<{room: string, day: string, start: string, level: number, course: string}> = []
   ): Promise<ScheduleSection[]> {
     
     console.log(`🤖 Starting AI generation for ${groupName} with ${courses.length} courses`)
@@ -225,6 +300,14 @@ export class GenerateAllSchedulesService {
       'LAB1', 'LAB2', 'LAB3', 'LAB4', 'LAB5', 'LAB6'
     ]
     
+    // Add occupied slots from other levels as STRICT blocked slots
+    const blockedSlotsFromOtherLevels = occupiedSlots.map(slot => ({
+      day: slot.day,
+      start: slot.start,
+      end: this.calculateEndTime(slot.start, 90), // Calculate end time (90 min = 1.5 hours)
+      room: slot.room
+    }))
+    
     // Prepare constraints for AI
     const constraints: SchedulingConstraints = {
       students_per_course: {},
@@ -233,11 +316,14 @@ export class GenerateAllSchedulesService {
         { day: 'Monday', start: '11:00', end: '12:00' }, // Break time
         { day: 'Tuesday', start: '11:00', end: '12:00' },
         { day: 'Wednesday', start: '11:00', end: '12:00' },
-        { day: 'Thursday', start: '11:00', end: '12:00' }
+        { day: 'Thursday', start: '11:00', end: '12:00' },
+        ...blockedSlotsFromOtherLevels // Add occupied slots from other levels
       ],
       available_rooms: allRooms,
       rules: [
         `This is for ${groupName} in Level ${level} - create a UNIQUE schedule`,
+        '🔒 CRITICAL: NEVER use time/room slots that are OCCUPIED by other levels',
+        `🔒 OCCUPIED SLOTS (MUST AVOID): ${occupiedSlots.map(s => `${s.room} on ${s.day} at ${s.start} (Level ${s.level})`).join(', ') || 'None yet'}`,
         'No classes on Friday',
         'No classes during 11:00-12:00 break time',
         'Each section should have 20-30 students maximum',
@@ -247,8 +333,9 @@ export class GenerateAllSchedulesService {
         'MATH102 and MATH103 should be scheduled sequentially if possible',
         'Create a balanced schedule across all days',
         'Avoid scheduling all courses on the same day',
-        'Check room availability - rooms may be used by other levels',
-        'Distribute courses evenly across Monday-Thursday'
+        '🔒 STRICTLY check room availability - rooms ARE used by other levels',
+        'Distribute courses evenly across Monday-Thursday',
+        `${occupiedSlots.length} slots are ALREADY OCCUPIED - avoid them at ALL costs`
       ],
       objective_priorities: {
         minimize_conflicts: true,
@@ -442,7 +529,7 @@ export class GenerateAllSchedulesService {
     let conflicts = 0
     const allSections = Object.values(groups).flatMap((group: any) => group.sections)
     
-    // Check for room conflicts
+    // Check for room conflicts within the same level
     const roomTimeMap = new Map<string, string[]>()
     
     for (const section of allSections) {
@@ -456,6 +543,257 @@ export class GenerateAllSchedulesService {
     }
     
     return conflicts
+  }
+
+  // Detect conflicts with existing schedules from other levels
+  private static async detectInterLevelConflicts(newSchedule: GeneratedSchedule): Promise<number> {
+    try {
+      let conflicts = 0
+      
+      // Get all existing schedules from other levels
+      const { data: existingSchedules } = await supabase
+        .from('schedule_versions')
+        .select('level, diff_json')
+        .neq('level', newSchedule.level)
+
+      if (!existingSchedules || existingSchedules.length === 0) {
+        return 0 // No other levels to conflict with
+      }
+
+      console.log(`🔍 Checking for conflicts with ${existingSchedules.length} existing schedules from other levels`)
+
+      // Extract all time slots from existing schedules
+      const existingTimeSlots = new Map<string, { level: number, course: string }>()
+      
+      for (const schedule of existingSchedules) {
+        const groups = schedule.diff_json?.groups || {}
+        for (const [groupName, groupData] of Object.entries(groups)) {
+          for (const section of (groupData as any).sections || []) {
+            const timeSlot = `${section.room}-${section.day}-${section.start_time}`
+            existingTimeSlots.set(timeSlot, {
+              level: schedule.level,
+              course: section.course_code
+            })
+          }
+        }
+      }
+
+      // Check new schedule against existing time slots
+      const newSections = Object.values(newSchedule.groups).flatMap((group: any) => group.sections)
+      
+      for (const section of newSections) {
+        const timeSlot = `${section.room}-${section.day}-${section.start_time}`
+        if (existingTimeSlots.has(timeSlot)) {
+          const conflict = existingTimeSlots.get(timeSlot)!
+          console.log(`⚠️ Conflict detected: Level ${newSchedule.level} ${section.course_code} conflicts with Level ${conflict.level} ${conflict.course} at ${timeSlot}`)
+          conflicts++
+        }
+      }
+
+      return conflicts
+    } catch (error) {
+      console.error('Error detecting inter-level conflicts:', error)
+      return 0
+    }
+  }
+
+  // Resolve conflicts by adjusting schedule times and rooms
+  private static async resolveConflicts(schedule: GeneratedSchedule): Promise<GeneratedSchedule> {
+    try {
+      console.log(`🔧 Resolving conflicts for Level ${schedule.level}...`)
+      
+      // Get all existing schedules from other levels
+      const { data: existingSchedules } = await supabase
+        .from('schedule_versions')
+        .select('level, diff_json')
+        .neq('level', schedule.level)
+
+      if (!existingSchedules || existingSchedules.length === 0) {
+        return schedule // No conflicts to resolve
+      }
+
+      // Extract occupied time slots from existing schedules
+      const occupiedSlots = new Map<string, { level: number, course: string }>()
+      
+      for (const existingSchedule of existingSchedules) {
+        const groups = existingSchedule.diff_json?.groups || {}
+        for (const [groupName, groupData] of Object.entries(groups)) {
+          for (const section of (groupData as any).sections || []) {
+            const timeSlot = `${section.room}-${section.day}-${section.start_time}`
+            occupiedSlots.set(timeSlot, {
+              level: existingSchedule.level,
+              course: section.course_code
+            })
+          }
+        }
+      }
+
+      // Available time slots (afternoon only, no Friday)
+      const availableTimes = ['12:00', '13:00', '14:00', '15:00', '16:00', '17:00']
+      const availableDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday']
+      const availableRooms = ['A101', 'A102', 'A103', 'A104', 'A105', 'A106', 'B201', 'B202', 'B203', 'B204', 'B205', 'B206', 'C301', 'C302', 'C303', 'C304', 'C305', 'C306', 'D401', 'D402', 'D403', 'D404', 'D405', 'D406', 'LAB1', 'LAB2', 'LAB3', 'LAB4', 'LAB5', 'LAB6']
+
+      // Resolve conflicts for each group
+      const resolvedGroups = { ...schedule.groups }
+      
+      for (const [groupName, groupData] of Object.entries(resolvedGroups)) {
+        const sections = (groupData as any).sections || []
+        const resolvedSections = []
+        
+        for (const section of sections) {
+          let resolvedSection = { ...section }
+          let attempts = 0
+          const maxAttempts = 50
+          
+          // Try to find a non-conflicting time slot
+          while (attempts < maxAttempts) {
+            const timeSlot = `${resolvedSection.room}-${resolvedSection.day}-${resolvedSection.start_time}`
+            
+            if (!occupiedSlots.has(timeSlot)) {
+              // No conflict, use this slot
+              break
+            }
+            
+            // Conflict found, try a different time/room
+            const randomDay = availableDays[Math.floor(Math.random() * availableDays.length)]
+            const randomTime = availableTimes[Math.floor(Math.random() * availableTimes.length)]
+            const randomRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)]
+            
+            resolvedSection = {
+              ...resolvedSection,
+              day: randomDay,
+              start_time: randomTime,
+              end_time: this.calculateEndTime(randomTime, 90), // 90 minutes duration
+              room: randomRoom
+            }
+            
+            attempts++
+          }
+          
+          if (attempts >= maxAttempts) {
+            console.log(`⚠️ Could not resolve conflict for ${section.course_code} in ${groupName} after ${maxAttempts} attempts`)
+          } else {
+            console.log(`✅ Resolved conflict for ${section.course_code} in ${groupName}`)
+          }
+          
+          resolvedSections.push(resolvedSection)
+        }
+        
+        resolvedGroups[groupName] = {
+          ...groupData,
+          sections: resolvedSections
+        }
+      }
+
+      return {
+        ...schedule,
+        groups: resolvedGroups
+      }
+    } catch (error) {
+      console.error('Error resolving conflicts:', error)
+      return schedule
+    }
+  }
+
+  // Calculate end time based on start time and duration
+  private static calculateEndTime(startTime: string, durationMinutes: number): string {
+    const [hours, minutes] = startTime.split(':').map(Number)
+    const totalMinutes = hours * 60 + minutes + durationMinutes
+    const endHours = Math.floor(totalMinutes / 60)
+    const endMinutes = totalMinutes % 60
+    return `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`
+  }
+
+  // Save a single schedule to database and return the saved schedule with real UUID
+  static async saveSingleScheduleToDatabase(schedule: GeneratedSchedule): Promise<string | null> {
+    try {
+      console.log(`💾 Attempting to save Level ${schedule.level} schedule to database...`)
+      console.log(`💾 Schedule object:`, JSON.stringify(schedule, null, 2))
+      
+      // Validate required fields
+      if (!schedule.level) {
+        throw new Error('Schedule level is required but was not provided')
+      }
+      
+      // Convert to the format expected by the existing database
+      const sections = Object.values(schedule.groups).flatMap(group => 
+        group.sections.map(section => ({
+          course_code: section.course_code,
+          section_label: section.section_label,
+          timeslot: {
+            day: section.day,
+            start: section.start_time,
+            end: section.end_time
+          },
+          room: section.room,
+          instructor_id: null,
+          student_count: section.student_count,
+          capacity: section.capacity
+        }))
+      )
+
+      console.log(`💾 Prepared ${sections.length} sections for database save`)
+
+      const semesterValue = `Level ${schedule.level}` || 'Unknown Level'
+      console.log(`💾 Using semester value: "${semesterValue}"`)
+      
+      const insertData = {
+        level: schedule.level,
+        semester: semesterValue,
+        diff_json: {
+          sections,
+          groups: schedule.groups,
+          conflicts: schedule.conflicts,
+          efficiency: schedule.efficiency,
+          status: 'draft',
+          generated_at: schedule.generated_at
+        },
+        author_id: null
+      }
+
+      console.log(`💾 Insert data:`, JSON.stringify(insertData, null, 2))
+
+      console.log(`💾 About to insert into database with data:`, insertData)
+      console.log(`💾 Semester value being sent: "${insertData.semester}" (type: ${typeof insertData.semester})`)
+
+      const { data, error } = await supabase
+        .from('schedule_versions')
+        .insert(insertData)
+        .select()
+
+      if (error) {
+        console.error(`❌ Database error saving schedule for Level ${schedule.level}:`, error)
+        console.error(`❌ Error details:`, {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        })
+        console.error(`❌ Insert data that failed:`, insertData)
+        
+        // If it's an RLS error, provide helpful message
+        if (error.code === '42501' || error.message.includes('permission denied')) {
+          console.error(`❌ RLS Policy Error: You need to run the fix-schedule-insert-rls.sql file in your Supabase SQL Editor to allow schedule inserts`)
+          throw new Error(`Database permission error. Please run the fix-schedule-insert-rls.sql file in your Supabase SQL Editor to allow schedule inserts.`)
+        }
+        
+        // If it's a null constraint error, provide specific help
+        if (error.message.includes('null value') && error.message.includes('semester')) {
+          console.error(`❌ Semester null constraint error. Insert data:`, insertData)
+          throw new Error(`Semester field is null. This should not happen. Please check the console logs for details.`)
+        }
+        
+        throw error
+      }
+
+      // Return the UUID from the saved schedule
+      const savedScheduleId = data && data.length > 0 ? data[0].id : null
+      console.log(`✅ Successfully saved Level ${schedule.level} schedule to database with ID: ${savedScheduleId}`)
+      return savedScheduleId
+    } catch (error) {
+      console.error('❌ Error saving schedule to database:', error)
+      throw error
+    }
   }
 
   // Save schedules to database
@@ -483,7 +821,7 @@ export class GenerateAllSchedulesService {
           .from('schedule_versions')
           .insert({
             level: schedule.level,
-            semester: schedule.semester,
+            semester: `Level ${schedule.level}`, // Use level as semester
             diff_json: {
               sections,
               groups: schedule.groups,
@@ -521,7 +859,6 @@ export class GenerateAllSchedulesService {
       return (data || []).map(schedule => ({
         id: schedule.id,
         level: schedule.level,
-        semester: schedule.semester,
         groups: schedule.diff_json?.groups || {},
         total_sections: schedule.diff_json?.total_sections || 0,
         conflicts: schedule.diff_json?.conflicts || 0,
@@ -537,17 +874,32 @@ export class GenerateAllSchedulesService {
   // Delete a schedule
   static async deleteSchedule(scheduleId: string): Promise<void> {
     try {
-      const { error } = await supabase
+      console.log(`🗑️ Attempting to delete schedule: ${scheduleId}`)
+      
+      const { data, error } = await supabase
         .from('schedule_versions')
         .delete()
         .eq('id', scheduleId)
+        .select()
 
-      if (error) throw error
+      if (error) {
+        console.error('Supabase delete error:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        })
+        throw new Error(`Failed to delete schedule: ${error.message || 'Unknown error'}`)
+      }
       
-      console.log(`✅ Deleted schedule ${scheduleId}`)
-    } catch (error) {
-      console.error('Error deleting schedule:', error)
-      throw error
+      console.log(`✅ Deleted schedule ${scheduleId}`, data)
+    } catch (error: any) {
+      console.error('Error deleting schedule:', {
+        error,
+        message: error?.message,
+        scheduleId
+      })
+      throw new Error(error?.message || 'Failed to delete schedule')
     }
   }
 
@@ -559,50 +911,33 @@ export class GenerateAllSchedulesService {
     enhancedConstraints: any
   ): Promise<GeneratedSchedule> {
     try {
-      console.log(`🤖 AI Editing for Level ${level} with prompt: ${userPrompt}`)
+      console.log(`🤖 Regenerating schedule for Level ${level}`)
+      console.log(`📝 User instructions: ${userPrompt}`)
+      console.log(`🔒 Occupied slots from other levels: ${enhancedConstraints.occupiedSlots?.length || 0}`)
       
-      // Create enhanced constraints for the AI
-      const aiConstraints = {
-        level,
-        userPrompt,
-        occupiedSlots: enhancedConstraints.occupiedSlots || [],
-        availableRooms: enhancedConstraints.availableRooms || ['A101', 'A102', 'B205', 'C301'],
-        studentCount: enhancedConstraints.studentCount || 25,
-        conflictPreventionRules: [
-          'CRITICAL: Avoid time conflicts with other levels in the same rooms',
-          'CRITICAL: Maintain afternoon-only policy (12 PM onwards)',
-          'CRITICAL: No classes on Friday',
-          'Optimize for minimal disruption to other levels',
-          'Balance instructor workload',
-          'Ensure proper room utilization'
-        ],
-        editingMode: true,
-        preserveConsistency: true
-      }
-
-      // Get courses for this level
-      const { data: courses } = await supabase
-        .from('courses')
-        .select('*')
-        .eq('level', level)
-
-      if (!courses || courses.length === 0) {
-        throw new Error(`No courses found for Level ${level}`)
-      }
-
-      console.log(`Found ${courses.length} courses for Level ${level}`)
-
-      // Use AI to generate optimized schedule based on prompt
-      const aiResponse = await this.callAIForScheduleEditing(aiConstraints, courses)
+      // SIMPLE APPROACH: Just use the regular generation method
+      // It already has all the strict conflict prevention built-in
+      console.log(`✅ Using regular generation method (already has strict conflict prevention)`)
       
-      // Process AI response into schedule format
-      const processedSchedule = await this.processAIEditingResponse(aiResponse, level, userPrompt)
+      // The regular generateLevelSchedule already:
+      // 1. Loads occupied slots from other levels
+      // 2. Passes them to AI with strict rules
+      // 3. Detects and resolves conflicts
+      // 4. Returns a proper schedule
       
-      console.log(`✅ AI generated edited schedule for Level ${level}`)
-      return processedSchedule
+      // Generate fresh schedule using the proven method (don't save to DB yet)
+      const newSchedule = await this.generateLevelSchedule(level, undefined, true)
+      
+      console.log(`✅ Generated schedule for Level ${level}:`, {
+        groupsCount: Object.keys(newSchedule.groups).length,
+        totalSections: newSchedule.total_sections,
+        conflicts: newSchedule.conflicts
+      })
+      
+      return newSchedule
 
     } catch (error) {
-      console.error('Error in AI schedule editing:', error)
+      console.error('Error in schedule regeneration:', error)
       throw error
     }
   }
@@ -610,6 +945,14 @@ export class GenerateAllSchedulesService {
   // Call AI service for schedule editing
   private static async callAIForScheduleEditing(constraints: any, courses: any[]): Promise<any> {
     try {
+      console.log(`🤖 Sending to AI:`, {
+        level: constraints.level,
+        occupiedSlotsCount: constraints.occupiedSlots?.length || 0,
+        occupiedSlotsSample: constraints.occupiedSlots?.slice(0, 3) || [],
+        userPrompt: constraints.userPrompt,
+        coursesCount: courses.length
+      })
+
       const response = await fetch('/api/generate-schedule', {
         method: 'POST',
         headers: {
@@ -632,10 +975,21 @@ export class GenerateAllSchedulesService {
       })
 
       if (!response.ok) {
+        console.error(`❌ AI API returned error status: ${response.status}`)
         throw new Error(`AI API error: ${response.status}`)
       }
 
       const data = await response.json()
+      console.log(`📡 AI API response:`, {
+        hasRecommendations: !!data.recommendations,
+        recommendationsCount: data.recommendations?.length || 0,
+        dataSample: data
+      })
+      
+      if (!data.recommendations || data.recommendations.length === 0) {
+        console.warn(`⚠️ AI API returned empty recommendations`)
+      }
+      
       return data.recommendations || []
     } catch (error) {
       console.error('AI API call failed:', error)
@@ -646,42 +1000,107 @@ export class GenerateAllSchedulesService {
 
   // Process AI response for editing
   private static async processAIEditingResponse(aiResponse: any[], level: number, userPrompt: string): Promise<GeneratedSchedule> {
+    console.log(`📥 Processing AI response for Level ${level}:`, {
+      aiResponseLength: aiResponse?.length || 0,
+      aiResponseSample: aiResponse?.slice(0, 2) || [],
+      userPrompt
+    })
+    
+    // Check if AI response is empty
+    if (!aiResponse || aiResponse.length === 0) {
+      console.error(`❌ AI returned EMPTY response for Level ${level}!`)
+      console.error(`❌ This means the AI API failed to generate any schedule sections.`)
+      throw new Error(`AI API returned empty schedule for Level ${level}. Please try again with different instructions.`)
+    }
+    
     const groups: { [key: string]: ScheduleGroup } = {}
     
     // Create groups A, B, C with distributed sections
     const groupNames = ['Group A', 'Group B', 'Group C']
     
     groupNames.forEach((groupName, groupIndex) => {
+      const groupSections = aiResponse
+        .filter((_, index) => index % groupNames.length === groupIndex)
+        .map(recommendation => ({
+          course_code: recommendation.course_code,
+          course_title: recommendation.course_code,
+          section_label: recommendation.section_label,
+          day: recommendation.timeslot.day,
+          start_time: recommendation.timeslot.start,
+          end_time: recommendation.timeslot.end,
+          room: recommendation.room,
+          instructor: 'TBA',
+          student_count: Math.min(25, recommendation.allocated_student_ids?.length || 25),
+          capacity: 30
+        }))
+      
+      console.log(`📋 ${groupName}: ${groupSections.length} sections`)
+      
       groups[groupName] = {
         name: groupName,
         student_count: Math.floor(75 / groupNames.length), // Distribute students
-        sections: aiResponse
-          .filter((_, index) => index % groupNames.length === groupIndex)
-          .map(recommendation => ({
-            course_code: recommendation.course_code,
-            course_title: recommendation.course_code,
-            section_label: recommendation.section_label,
-            day: recommendation.timeslot.day,
-            start_time: recommendation.timeslot.start,
-            end_time: recommendation.timeslot.end,
-            room: recommendation.room,
-            instructor: 'TBA',
-            student_count: Math.min(25, recommendation.allocated_student_ids?.length || 25),
-            capacity: 30
-          }))
+        sections: groupSections
       }
     })
 
-    return {
-      id: `edited-${level}-${Date.now()}`,
+    // Calculate total sections from all groups
+    const totalSections = Object.values(groups).reduce((sum, group) => sum + group.sections.length, 0)
+    console.log(`📊 Total sections calculated: ${totalSections}`)
+    
+    // DON'T create a new ID - the caller will handle updating the existing schedule
+    const schedule: GeneratedSchedule = {
       level,
-      semester: 'Fall 2024',
       groups,
-      total_sections: aiResponse.length,
+      total_sections: totalSections,
       conflicts: 0,
       efficiency: 85,
       generated_at: new Date().toISOString()
     }
+
+    // Detect internal conflicts (within groups)
+    const internalConflicts = this.detectConflicts(schedule.groups)
+    console.log(`🔍 Detected ${internalConflicts} internal conflicts in edited schedule`)
+
+    // Check for inter-level conflicts
+    const interLevelConflicts = await this.detectInterLevelConflicts(schedule)
+    console.log(`🔍 Detected ${interLevelConflicts} inter-level conflicts in edited schedule`)
+
+    const totalConflicts = internalConflicts + interLevelConflicts
+
+    let finalSchedule = schedule
+    if (totalConflicts > 0) {
+      console.warn(`⚠️ AI generated schedule still has ${totalConflicts} conflicts (${internalConflicts} internal + ${interLevelConflicts} inter-level)`)
+      console.warn(`⚠️ This means the AI did NOT properly follow the conflict avoidance instructions`)
+      
+      // Try to resolve conflicts
+      finalSchedule = await this.resolveConflicts(schedule)
+      
+      // Recalculate conflicts after resolution attempt
+      const resolvedInternalConflicts = this.detectConflicts(finalSchedule.groups)
+      const resolvedInterLevelConflicts = await this.detectInterLevelConflicts(finalSchedule)
+      const finalTotalConflicts = resolvedInternalConflicts + resolvedInterLevelConflicts
+      
+      finalSchedule = {
+        ...finalSchedule,
+        conflicts: finalTotalConflicts,
+        efficiency: Math.max(0, 85 - (finalTotalConflicts * 5))
+      }
+      
+      if (finalTotalConflicts > 0) {
+        console.error(`❌ Still have ${finalTotalConflicts} conflicts after resolution attempt`)
+        console.error(`❌ AI is not properly avoiding occupied time slots`)
+      } else {
+        console.log(`✅ Conflict resolution successful! All conflicts resolved.`)
+      }
+    } else {
+      console.log(`✅ No conflicts detected in edited schedule!`)
+      finalSchedule.conflicts = 0
+    }
+
+    // DON'T save to database here - the caller (saveEdits) will handle updating the existing schedule
+    console.log(`✅ Edited schedule ready (${finalSchedule.conflicts} conflicts)`)
+
+    return finalSchedule
   }
 
   // Fallback schedule generation for editing
@@ -714,27 +1133,171 @@ export class GenerateAllSchedulesService {
     }
   ): Promise<void> {
     try {
-      const { error } = await supabase
+      console.log('💾 Updating schedule in database:', {
+        id: scheduleId,
+        groupsCount: Object.keys(updateData.groups || {}).length,
+        groupNames: Object.keys(updateData.groups || {}),
+        totalSections: updateData.total_sections
+      })
+
+      const { data, error } = await supabase
         .from('schedule_versions')
         .update({
           diff_json: {
             groups: updateData.groups,
             total_sections: updateData.total_sections,
             conflicts: updateData.conflicts,
-            efficiency: updateData.efficiency
-          },
-          updated_at: new Date().toISOString()
+            efficiency: updateData.efficiency,
+            status: 'draft',
+            generated_at: new Date().toISOString()
+          }
         })
         .eq('id', scheduleId)
+        .select()
 
       if (error) {
+        console.error('❌ Database update error:', error)
         throw new Error(`Failed to update schedule: ${error.message}`)
       }
 
-      console.log('Successfully updated schedule:', scheduleId)
+      console.log('✅ Successfully updated schedule in database:', {
+        id: scheduleId,
+        updatedData: data,
+        groupsSaved: Object.keys(updateData.groups || {}).length
+      })
     } catch (error) {
       console.error('Error updating schedule:', error)
       throw error
     }
   }
+
+  /**
+   * Get group statistics for a specific level
+   * Returns which groups have students and how many
+   */
+  static async getGroupStatistics(level: number): Promise<{
+    groups: { letter: string; studentCount: number; hasSchedule: boolean }[]
+  }> {
+    try {
+      // Get students grouped by group letter
+      const { data: students, error: studentsError } = await supabase
+        .from('students')
+        .select('student_group')
+        .eq('level', level)
+
+      if (studentsError) throw studentsError
+
+      const studentsByGroup = (students || []).reduce((acc: any, student: any) => {
+        const group = student.student_group || 'A'
+        acc[group] = (acc[group] || 0) + 1
+        return acc
+      }, {})
+
+      // Check which groups have schedules
+      const { data: schedules, error: schedulesError } = await supabase
+        .from('schedule_versions')
+        .select('diff_json')
+        .eq('level', level)
+        .order('created_at', { ascending: false })
+        .limit(1)
+
+      if (schedulesError) throw schedulesError
+
+      const existingGroups = schedules && schedules.length > 0 
+        ? Object.keys(schedules[0].diff_json?.groups || {}).map(g => g.replace('Group ', ''))
+        : []
+
+      // Build group statistics for A, B, C
+      const groups = ['A', 'B', 'C'].map(letter => ({
+        letter,
+        studentCount: studentsByGroup[letter] || 0,
+        hasSchedule: existingGroups.includes(letter)
+      }))
+
+      return { groups }
+    } catch (error) {
+      console.error('Error getting group statistics:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Generate schedule for specific groups of a level
+   * Useful when new students are added to a group that didn't have a schedule before
+   */
+  static async generateGroupSchedules(level: number, groupLetters: string[]): Promise<GeneratedSchedule> {
+    try {
+      console.log(`🎯 Generating schedules for Level ${level}, Groups: ${groupLetters.join(', ')}`)
+      
+      // Generate schedule for specific groups
+      const schedule = await this.generateLevelSchedule(level, groupLetters)
+      
+      return schedule
+    } catch (error) {
+      console.error(`Error generating group schedules for Level ${level}:`, error)
+      throw error
+    }
+  }
+
+  /**
+   * Get all occupied time/room slots from ALL other levels
+   * This ensures STRICT no-overlap between levels
+   */
+  private static async getAllOccupiedSlotsFromOtherLevels(
+    currentLevel: number
+  ): Promise<Array<{room: string, day: string, start: string, level: number, course: string}>> {
+    try {
+      const { data: schedules, error } = await supabase
+        .from('schedule_versions')
+        .select('level, diff_json')
+        .neq('level', currentLevel)
+        .order('created_at', { ascending: false })
+      
+      if (error) {
+        console.error('Error loading other level schedules:', error)
+        return []
+      }
+
+      if (!schedules || schedules.length === 0) {
+        console.log('🔒 No other level schedules found - first schedule being generated')
+        return []
+      }
+
+      const occupiedSlots: Array<{room: string, day: string, start: string, level: number, course: string}> = []
+
+      // Get the latest schedule for each level
+      const latestSchedulesByLevel = new Map<number, any>()
+      for (const schedule of schedules) {
+        if (!latestSchedulesByLevel.has(schedule.level)) {
+          latestSchedulesByLevel.set(schedule.level, schedule)
+        }
+      }
+
+      // Extract all time/room slots from all groups in all levels
+      for (const [levelNum, schedule] of latestSchedulesByLevel.entries()) {
+        const groups = schedule.diff_json?.groups || {}
+        
+        for (const [groupName, groupData] of Object.entries(groups)) {
+          const sections = (groupData as any).sections || []
+          
+          for (const section of sections) {
+            occupiedSlots.push({
+              room: section.room,
+              day: section.day,
+              start: section.start_time,
+              level: levelNum,
+              course: section.course_code
+            })
+          }
+        }
+      }
+
+      console.log(`🔒 Found ${occupiedSlots.length} occupied slots from ${latestSchedulesByLevel.size} other levels`)
+      return occupiedSlots
+    } catch (error) {
+      console.error('Error getting occupied slots:', error)
+      return []
+    }
+  }
+
 }

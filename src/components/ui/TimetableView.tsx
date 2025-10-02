@@ -22,7 +22,6 @@ interface TimetableViewProps {
   studentInfo?: {
     name?: string
     level?: number
-    semester?: string
   }
 }
 
@@ -46,8 +45,8 @@ const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 export function TimetableView({ schedule, title = "Class Timetable", studentInfo }: TimetableViewProps) {
   const timeSlots = getTimeSlots12Hour()
 
-  const getSectionAtTime = (day: string, timeSlot: string) => {
-    return schedule.find(entry => {
+  const getSectionsAtTime = (day: string, timeSlot: string) => {
+    return schedule.filter(entry => {
       const entryDay = entry.timeslot.day
       const entryStartTime = formatTime12Hour(entry.timeslot.start)
       return entryDay === day && entryStartTime === timeSlot
@@ -62,7 +61,6 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
           <div className="text-sm text-gray-600 space-y-1">
             {studentInfo.name && <p className="font-medium">Student: {studentInfo.name}</p>}
             {studentInfo.level && <p>Level: {studentInfo.level}</p>}
-            {studentInfo.semester && <p>Semester: {studentInfo.semester}</p>}
           </div>
         )}
       </CardHeader>
@@ -94,19 +92,38 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
                   
                   {/* Day Columns */}
                   {DAYS.map(day => {
-                    const section = getSectionAtTime(day, timeSlot)
+                    const sections = getSectionsAtTime(day, timeSlot)
                     return (
                       <td key={`${day}-${timeSlot}`} className="border border-gray-300 px-2 py-2 text-center align-top">
-                        {section ? (
+                        {sections.length > 0 ? (
                           <div className="text-xs leading-tight space-y-1">
-                            <div className="font-bold text-gray-900">{section.course_code}</div>
-                            <div className="text-gray-700">Section {section.section_label}</div>
-                            <div className="text-gray-600">Room {section.room}</div>
-                            <div className="text-gray-500">
-                              {formatTime12Hour(section.timeslot.start)} - {formatTime12Hour(section.timeslot.end)}
-                            </div>
-                            {section.instructor_id && section.instructor_id !== 'TBA' && (
-                              <div className="text-gray-500 italic">{section.instructor_id}</div>
+                            {sections.map((section, sectionIndex) => (
+                              <div 
+                                key={`${section.course_code}-${section.section_label}-${sectionIndex}`}
+                                className={`p-2 rounded border ${
+                                  sections.length > 1 
+                                    ? 'bg-blue-50 border-blue-200 mb-1' 
+                                    : 'bg-white border-gray-200'
+                                }`}
+                              >
+                                <div className="font-bold text-gray-900">{section.course_code}</div>
+                                <div className="text-gray-700">Section {section.section_label}</div>
+                                <div className="text-gray-600">Room {section.room}</div>
+                                <div className="text-gray-500">
+                                  {formatTime12Hour(section.timeslot.start)} - {formatTime12Hour(section.timeslot.end)}
+                                </div>
+                                {section.instructor_id && section.instructor_id !== 'TBA' && (
+                                  <div className="text-gray-500 italic">{section.instructor_id}</div>
+                                )}
+                                {sections.length > 1 && sectionIndex < sections.length - 1 && (
+                                  <div className="border-t border-blue-300 mt-1 pt-1"></div>
+                                )}
+                              </div>
+                            ))}
+                            {sections.length > 1 && (
+                              <div className="text-xs text-blue-600 font-semibold mt-1">
+                                {sections.length} groups
+                              </div>
                             )}
                           </div>
                         ) : (

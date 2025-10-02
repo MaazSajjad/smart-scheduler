@@ -48,6 +48,8 @@ export function Sidebar({ className }: SidebarProps) {
 
   const getRoleIcon = (role: string) => {
     switch (role) {
+      case 'admin':
+        return <Settings className="h-4 w-4" />
       case 'student':
         return <GraduationCap className="h-4 w-4" />
       case 'faculty':
@@ -63,6 +65,8 @@ export function Sidebar({ className }: SidebarProps) {
 
   const getRoleColor = (role: string) => {
     switch (role) {
+      case 'admin':
+        return 'bg-red-100 text-red-800'
       case 'student':
         return 'bg-blue-100 text-blue-800'
       case 'faculty':
@@ -81,7 +85,26 @@ export function Sidebar({ className }: SidebarProps) {
       { name: 'Dashboard', href: '/dashboard', icon: Home },
     ]
 
+    // Admin menu items (shared by admin and scheduling_committee)
+    const adminMenuItems = [
+      ...baseItems,
+      { name: 'Generate All Schedules', href: '/committee/generate-all', icon: Calendar },
+      // { name: 'Generate Schedule', href: '/committee/generate', icon: PlusCircle }, // DISABLED
+      { name: 'Edit Schedule', href: '/committee/edit', icon: Edit3 },
+      { name: 'Manage Rules', href: '/committee/rules', icon: Settings },
+      { name: 'Course Management', href: '/committee/courses', icon: BookOpen },
+      { name: 'Student Management', href: '/committee/students', icon: Users },
+      { name: 'Create Student', href: '/admin/create-student', icon: UserPlus },
+      { name: 'Bulk Auth Setup', href: '/admin/bulk-auth', icon: Users },
+      { name: 'Create User', href: '/admin/create-user', icon: UserPlus },
+      { name: 'Analytics', href: '/committee/analytics', icon: BarChart3 },
+    ]
+
     switch (userRole) {
+      case 'admin':
+      case 'scheduling_committee':
+        return adminMenuItems
+      
       case 'student':
         return [
           ...baseItems,
@@ -96,19 +119,6 @@ export function Sidebar({ className }: SidebarProps) {
           { name: 'My Schedule', href: '/faculty/schedule', icon: Calendar },
           { name: 'Student Lists', href: '/faculty/students', icon: Users },
           { name: 'Feedback', href: '/faculty/feedback', icon: MessageSquare },
-        ]
-      
-      case 'scheduling_committee':
-        return [
-          ...baseItems,
-          { name: 'Generate All Schedules', href: '/committee/generate-all', icon: Calendar },
-          { name: 'Generate Schedule', href: '/committee/generate', icon: PlusCircle },
-          { name: 'Edit Schedule', href: '/committee/edit', icon: Edit3 },
-          { name: 'Manage Rules', href: '/committee/rules', icon: Settings },
-          { name: 'Course Management', href: '/committee/courses', icon: BookOpen },
-          { name: 'Student Management', href: '/committee/students', icon: Users },
-          { name: 'Create User', href: '/admin/create-user', icon: UserPlus },
-          { name: 'Analytics', href: '/committee/analytics', icon: BarChart3 },
         ]
       
       case 'teaching_load_committee':

@@ -306,17 +306,20 @@ export default function DashboardPage() {
           </div>
         )
       
+      case 'admin':
       case 'scheduling_committee':
         return (
           <div className="p-6 space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-3xl font-bold text-gray-900">Scheduling Committee Dashboard</h1>
+                <h1 className="text-3xl font-bold text-gray-900">
+                  {userRole === 'admin' ? 'Admin Dashboard' : 'Scheduling Committee Dashboard'}
+                </h1>
                 <p className="text-gray-600">Manage and generate academic schedules</p>
               </div>
-              <Badge variant="secondary" className="bg-purple-100 text-purple-800">
-                <Calendar className="w-4 h-4 mr-1" />
-                Scheduling Committee
+              <Badge variant="secondary" className={userRole === 'admin' ? 'bg-red-100 text-red-800' : 'bg-purple-100 text-purple-800'}>
+                {userRole === 'admin' ? <Settings className="w-4 h-4 mr-1" /> : <Calendar className="w-4 h-4 mr-1" />}
+                {userRole === 'admin' ? 'Admin' : 'Scheduling Committee'}
               </Badge>
             </div>
 

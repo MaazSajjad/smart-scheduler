@@ -93,21 +93,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const fetchUserRole = async (userId: string) => {
     try {
+      console.log('🔍 Fetching role for user:', userId)
+      
       // Check localStorage first for cached role
       const cachedRole = localStorage.getItem(`user_role_${userId}`)
       if (cachedRole) {
+        console.log('✅ Using cached role:', cachedRole)
         setUserRole(cachedRole)
         return
       }
 
+      console.log('🔄 Fetching role from database...')
       const { data, error } = await supabase
         .from('users')
         .select('role')
         .eq('id', userId)
         .single()
 
+      console.log('📊 Database response:', { data, error })
+
       if (error) {
-        console.error('Error fetching user role:', error)
+        console.error('❌ Error fetching user role:', error)
         
         // If user doesn't exist in public.users, they need to be created by admin
         if (error.code === 'PGRST116') {
@@ -124,8 +130,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const role = data?.role || 'student'
+      console.log('✅ Setting user role to:', role)
       setUserRole(role)
       localStorage.setItem(`user_role_${userId}`, role)
+      console.log('✅ User role set successfully. Current role:', role)
     } catch (error) {
       console.error('Error fetching user role:', error)
       // Set default role to prevent infinite loading

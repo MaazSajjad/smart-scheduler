@@ -34,7 +34,7 @@ const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 
 export function generateTimetablePDF(
   schedule: TimetableEntry[],
-  studentInfo: { name?: string; level?: number; semester?: string } = {}
+  studentInfo: { name?: string; level?: number } = {}
 ): void {
   const doc = new jsPDF('landscape', 'mm', 'a4')
   
@@ -55,10 +55,6 @@ export function generateTimetablePDF(
     doc.text(`Level: ${studentInfo.level}`, 20, yPos)
     yPos += 7
   }
-  if (studentInfo.semester) {
-    doc.text(`Semester: ${studentInfo.semester}`, 20, yPos)
-    yPos += 7
-  }
   
   // Create timetable grid data
   const timeSlots = getTimeSlots12Hour()
@@ -72,21 +68,24 @@ export function generateTimetablePDF(
     const row = [timeSlot]
     
     DAYS.forEach(day => {
-      // Find schedule entry for this day/time
-      const entry = schedule.find(entry => {
+      // Find all schedule entries for this day/time (multiple groups can overlap)
+      const entries = schedule.filter(entry => {
         const entryDay = entry.timeslot.day
         const entryStartTime = formatTime12Hour(entry.timeslot.start)
         return entryDay === day && entryStartTime === timeSlot
       })
       
-      if (entry) {
-        const endTime = formatTime12Hour(entry.timeslot.end)
-        const cellContent = [
-          `${entry.course_code}`,
-          `Section ${entry.section_label}`,
-          `Room ${entry.room}`,
-          `${timeSlot} - ${endTime}`
-        ].join('\n')
+      if (entries.length > 0) {
+        const cellContent = entries.map(entry => {
+          const endTime = formatTime12Hour(entry.timeslot.end)
+          return [
+            `${entry.course_code}`,
+            `Section ${entry.section_label}`,
+            `Room ${entry.room}`,
+            `${timeSlot} - ${endTime}`
+          ].join('\n')
+        }).join('\n\n---\n\n')
+        
         row.push(cellContent)
       } else {
         row.push('') // Empty cell

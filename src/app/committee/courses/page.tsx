@@ -47,10 +47,17 @@ export default function CourseManagementPage() {
     level: 1,
     is_fixed: false,
     typical_duration: 60,
-    allowable_rooms: []
+    allowable_rooms: [],
+    course_category: 'compulsory',
+    credits: 3,
+    prerequisites: [],
+    offered_semesters: ['Fall', 'Spring'],
+    department: 'Computer Science'
   })
 
   const [roomInput, setRoomInput] = useState('')
+  const [prerequisiteInput, setPrerequisiteInput] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
 
   // Load courses on component mount
   useEffect(() => {
@@ -117,7 +124,12 @@ export default function CourseManagementPage() {
       level: course.level,
       is_fixed: course.is_fixed,
       typical_duration: course.typical_duration,
-      allowable_rooms: course.allowable_rooms
+      allowable_rooms: course.allowable_rooms,
+      course_category: (course as any).course_category || 'compulsory',
+      credits: (course as any).credits || 3,
+      prerequisites: (course as any).prerequisites || [],
+      offered_semesters: (course as any).offered_semesters || ['Fall', 'Spring'],
+      department: (course as any).department || 'Computer Science'
     })
     setIsAddDialogOpen(true)
   }
@@ -129,9 +141,15 @@ export default function CourseManagementPage() {
       level: 1,
       is_fixed: false,
       typical_duration: 60,
-      allowable_rooms: []
+      allowable_rooms: [],
+      course_category: 'compulsory',
+      credits: 3,
+      prerequisites: [],
+      offered_semesters: ['Fall', 'Spring'],
+      department: 'Computer Science'
     })
     setRoomInput('')
+    setPrerequisiteInput('')
     setEditingCourse(null)
   }
 
@@ -152,11 +170,44 @@ export default function CourseManagementPage() {
     })
   }
 
+  const addPrerequisite = () => {
+    if (prerequisiteInput.trim() && !formData.prerequisites!.includes(prerequisiteInput.trim())) {
+      setFormData({
+        ...formData,
+        prerequisites: [...(formData.prerequisites || []), prerequisiteInput.trim()]
+      })
+      setPrerequisiteInput('')
+    }
+  }
+
+  const removePrerequisite = (prereq: string) => {
+    setFormData({
+      ...formData,
+      prerequisites: formData.prerequisites!.filter(p => p !== prereq)
+    })
+  }
+
+  const toggleSemester = (semester: string) => {
+    const current = formData.offered_semesters || []
+    if (current.includes(semester)) {
+      setFormData({
+        ...formData,
+        offered_semesters: current.filter(s => s !== semester)
+      })
+    } else {
+      setFormData({
+        ...formData,
+        offered_semesters: [...current, semester]
+      })
+    }
+  }
+
   const filteredCourses = courses.filter(course => {
     const matchesSearch = course.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          course.title.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesLevel = levelFilter === 'all' || course.level.toString() === levelFilter
-    return matchesSearch && matchesLevel
+    const matchesCategory = categoryFilter === 'all' || (course as any).course_category === categoryFilter
+    return matchesSearch && matchesLevel && matchesCategory
   })
 
   return (
@@ -240,7 +291,35 @@ export default function CourseManagementPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="category">Course Category *</Label>
+                    <Select 
+                      value={formData.course_category} 
+                      onValueChange={(value: 'compulsory' | 'elective') => setFormData({...formData, course_category: value})}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="compulsory">Compulsory (Required)</SelectItem>
+                        <SelectItem value="elective">Elective (Optional)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="credits">Credits *</Label>
+                    <Input
+                      id="credits"
+                      type="number"
+                      value={formData.credits}
+                      onChange={(e) => setFormData({...formData, credits: parseInt(e.target.value)})}
+                      placeholder="3"
+                      min="1"
+                      max="6"
+                      required
+                    />
+                  </div>
                   <div>
                     <Label htmlFor="duration">Duration (minutes) *</Label>
                     <Input
@@ -254,14 +333,87 @@ export default function CourseManagementPage() {
                       required
                     />
                   </div>
-                  <div className="flex items-center space-x-2 pt-6">
-                    <Checkbox
-                      id="is_fixed"
-                      checked={formData.is_fixed}
-                      onCheckedChange={(checked) => setFormData({...formData, is_fixed: !!checked})}
-                    />
-                    <Label htmlFor="is_fixed">Fixed Schedule (managed by another department)</Label>
+                </div>
+
+                <div>
+                  <Label htmlFor="department">Department *</Label>
+                  <Input
+                    id="department"
+                    value={formData.department}
+                    onChange={(e) => setFormData({...formData, department: e.target.value})}
+                    placeholder="e.g., Computer Science"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <Label>Offered Semesters</Label>
+                  <div className="flex items-center space-x-4 mt-2">
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="fall"
+                        checked={formData.offered_semesters?.includes('Fall')}
+                        onCheckedChange={() => toggleSemester('Fall')}
+                      />
+                      <Label htmlFor="fall">Fall</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="spring"
+                        checked={formData.offered_semesters?.includes('Spring')}
+                        onCheckedChange={() => toggleSemester('Spring')}
+                      />
+                      <Label htmlFor="spring">Spring</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="summer"
+                        checked={formData.offered_semesters?.includes('Summer')}
+                        onCheckedChange={() => toggleSemester('Summer')}
+                      />
+                      <Label htmlFor="summer">Summer</Label>
+                    </div>
                   </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="is_fixed"
+                    checked={formData.is_fixed}
+                    onCheckedChange={(checked) => setFormData({...formData, is_fixed: !!checked})}
+                  />
+                  <Label htmlFor="is_fixed">Fixed Schedule (managed by another department)</Label>
+                </div>
+
+                <div>
+                  <Label>Prerequisites (Course Codes)</Label>
+                  <div className="flex space-x-2 mt-1">
+                    <Input
+                      value={prerequisiteInput}
+                      onChange={(e) => setPrerequisiteInput(e.target.value)}
+                      placeholder="e.g., CS101"
+                      onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addPrerequisite())}
+                    />
+                    <Button type="button" onClick={addPrerequisite} variant="outline">
+                      Add
+                    </Button>
+                  </div>
+                  {formData.prerequisites && formData.prerequisites.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {formData.prerequisites.map((prereq, index) => (
+                        <Badge key={index} variant="secondary" className="flex items-center gap-1">
+                          {prereq}
+                          <button
+                            type="button"
+                            onClick={() => removePrerequisite(prereq)}
+                            className="ml-1 hover:text-red-600"
+                          >
+                            ×
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -344,6 +496,16 @@ export default function CourseManagementPage() {
                     <SelectItem value="4">Level 4</SelectItem>
                   </SelectContent>
                 </Select>
+                <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Categories</SelectItem>
+                    <SelectItem value="compulsory">Compulsory</SelectItem>
+                    <SelectItem value="elective">Elective</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </CardContent>
@@ -383,8 +545,10 @@ export default function CourseManagementPage() {
                     <TableHead>Course Code</TableHead>
                     <TableHead>Title</TableHead>
                     <TableHead>Level</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Credits</TableHead>
                     <TableHead>Duration</TableHead>
-                    <TableHead>Rooms</TableHead>
+                    <TableHead>Department</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -392,56 +556,63 @@ export default function CourseManagementPage() {
                 <TableBody>
                   {filteredCourses.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                      <TableCell colSpan={9} className="text-center py-8 text-gray-500">
                         No courses found. Create your first course to get started.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredCourses.map((course) => (
-                      <TableRow key={course.id}>
-                        <TableCell className="font-medium">{course.code}</TableCell>
-                        <TableCell>{course.title}</TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">Level {course.level}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center">
-                            <Clock className="mr-1 h-4 w-4 text-gray-400" />
-                            {course.typical_duration} min
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center">
-                            <Building className="mr-1 h-4 w-4 text-gray-400" />
-                            {course.allowable_rooms.length > 0 ? course.allowable_rooms.join(', ') : 'Any'}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={course.is_fixed ? "destructive" : "secondary"}>
-                            {course.is_fixed ? "Fixed" : "Flexible"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center space-x-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleEdit(course)}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-red-600 hover:text-red-700"
-                              onClick={() => handleDelete(course.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
+                    filteredCourses.map((course) => {
+                      const courseCategory = (course as any).course_category || 'compulsory'
+                      const credits = (course as any).credits || 3
+                      const department = (course as any).department || 'N/A'
+                      
+                      return (
+                        <TableRow key={course.id}>
+                          <TableCell className="font-medium">{course.code}</TableCell>
+                          <TableCell>{course.title}</TableCell>
+                          <TableCell>
+                            <Badge variant="secondary">Level {course.level}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={courseCategory === 'elective' ? "default" : "outline"}>
+                              {courseCategory === 'elective' ? '📚 Elective' : '✓ Compulsory'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{credits} CR</TableCell>
+                          <TableCell>
+                            <div className="flex items-center">
+                              <Clock className="mr-1 h-4 w-4 text-gray-400" />
+                              {course.typical_duration} min
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm">{department}</TableCell>
+                          <TableCell>
+                            <Badge variant={course.is_fixed ? "destructive" : "secondary"}>
+                              {course.is_fixed ? "Fixed" : "Flexible"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center space-x-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEdit(course)}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-red-600 hover:text-red-700"
+                                onClick={() => handleDelete(course.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -450,7 +621,7 @@ export default function CourseManagementPage() {
         </Card>
 
         {/* Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
@@ -465,12 +636,12 @@ export default function CourseManagementPage() {
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
-                <Users className="h-8 w-8 text-green-600" />
+                <CheckCircle className="h-8 w-8 text-green-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
-                    {courses.filter(c => c.level === 1).length}
+                    {courses.filter(c => (c as any).course_category === 'compulsory').length}
                   </p>
-                  <p className="text-sm text-gray-600">Level 1 Courses</p>
+                  <p className="text-sm text-gray-600">Compulsory</p>
                 </div>
               </div>
             </CardContent>
@@ -478,12 +649,25 @@ export default function CourseManagementPage() {
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
-                <Clock className="h-8 w-8 text-purple-600" />
+                <Users className="h-8 w-8 text-purple-600" />
+                <div className="ml-4">
+                  <p className="text-2xl font-bold">
+                    {courses.filter(c => (c as any).course_category === 'elective').length}
+                  </p>
+                  <p className="text-sm text-gray-600">Electives</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center">
+                <Clock className="h-8 w-8 text-orange-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
                     {courses.filter(c => !c.is_fixed).length}
                   </p>
-                  <p className="text-sm text-gray-600">Flexible Courses</p>
+                  <p className="text-sm text-gray-600">Flexible</p>
                 </div>
               </div>
             </CardContent>
@@ -491,7 +675,7 @@ export default function CourseManagementPage() {
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center">
-                <Building className="h-8 w-8 text-orange-600" />
+                <Building className="h-8 w-8 text-red-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
                     {new Set(courses.flatMap(course => course.allowable_rooms)).size}

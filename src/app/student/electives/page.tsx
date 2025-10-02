@@ -46,11 +46,22 @@ export default function ElectivePreferencesPage() {
     try {
       setLoading(true)
       
-      // Load available elective courses (assuming level 3 for demo)
-      const allCourses = await CourseService.getAllCourses()
-      const electiveCourses = allCourses.filter(course => 
-        course.level === 3 && !course.is_fixed
-      )
+      // Get student's level first
+      let studentLevel = 3 // default
+      if (user?.id) {
+        const { data: student } = await supabase
+          .from('students')
+          .select('level')
+          .eq('user_id', user.id)
+          .single()
+        
+        if (student) {
+          studentLevel = student.level
+        }
+      }
+
+      // Load elective courses for student's level using new course_category field
+      const electiveCourses = await CourseService.getElectivesByLevel(studentLevel)
       setCourses(electiveCourses)
 
       // Load existing preferences
