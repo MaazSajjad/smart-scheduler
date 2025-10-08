@@ -1,6 +1,9 @@
 import { supabase } from './supabase'
 import { getScheduleRecommendation, SchedulingConstraints } from './groq'
 import { ScheduleService } from './scheduleService'
+import { PreferenceService } from './preferenceService'
+import { SystemSettingsService } from './systemSettingsService'
+import { RuleDefinitionsService } from './ruleDefinitionsService'
 
 export interface ScheduleGroup {
   name: string
@@ -88,6 +91,14 @@ export class GenerateAllSchedulesService {
       const occupiedSlots = await this.getAllOccupiedSlotsFromOtherLevels(level)
       console.log(`🔒 STRICT MODE: Loaded ${occupiedSlots.length} occupied time/room slots from other levels`)
 
+      // 🆕 PREFERENCE-DRIVEN: Load student preferences and active rules
+      const currentSemester = await SystemSettingsService.getCurrentSemester()
+      const preferenceAnalytics = await PreferenceService.getPreferenceAnalytics(level, currentSemester)
+      const activeRules = await RuleDefinitionsService.getRulesAsAIConstraints()
+      
+      console.log(`📊 PREFERENCE DATA: Found ${preferenceAnalytics.length} elective courses with student demand`)
+      console.log(`📋 ACTIVE RULES: ${activeRules.length} scheduling rules enabled`)
+
       // Get courses for this level
       const { data: courses, error: coursesError } = await supabase
         .from('courses')
@@ -112,7 +123,19 @@ export class GenerateAllSchedulesService {
 
       console.log(`📚 Found ${courses.length} courses and ${students.length} students for Level ${level}`)
 
-      // Group students by their assigned group
+      // Load level group settings to determine per-group capacity and group names
+      const { data: levelSettings } = await supabase
+        .from('level_group_settings')
+        .select('students_per_group, num_groups, group_names')
+        .eq('level', level)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      const studentsPerGroup = (levelSettings as any)?.students_per_group || 25
+      const configuredGroupNames: string[] = (levelSettings as any)?.group_names || ['A','B','C']
+
+      // Group students by their assigned group (if present)
       const studentsByGroup = students.reduce((acc: any, student: any) => {
         const group = student.student_group || 'A'
         if (!acc[group]) acc[group] = []
@@ -120,7 +143,38 @@ export class GenerateAllSchedulesService {
         return acc
       }, {})
 
-      console.log(`📊 Students per group:`, Object.entries(studentsByGroup).map(([g, s]: [string, any]) => `${g}: ${s.length}`).join(', '))
+      // Rebalance overflow to subsequent groups based on students_per_group and configured group names (without changing DB)
+      const balancedGroups: Record<string, any[]> = {}
+      let remaining = [...students]
+      for (const letter of configuredGroupNames) {
+        balancedGroups[letter] = []
+      }
+      // If students already have groups, preserve but cap per group and spill overflow in order A->B->C...
+      for (const letter of configuredGroupNames) {
+        const current = studentsByGroup[letter] || []
+        const keep = current.slice(0, studentsPerGroup)
+        const spill = current.slice(studentsPerGroup)
+        balancedGroups[letter].push(...keep)
+        remaining = remaining.filter(s => !keep.includes(s))
+        remaining.push(...spill)
+      }
+      // Assign any remaining (unassigned or overflow) to next groups with capacity
+      for (const student of remaining) {
+        let placed = false
+        for (const letter of configuredGroupNames) {
+          if (balancedGroups[letter].length < studentsPerGroup) {
+            balancedGroups[letter].push(student)
+            placed = true
+            break
+          }
+        }
+        if (!placed) {
+          // If all full, append to last group (soft overflow)
+          balancedGroups[configuredGroupNames[configuredGroupNames.length - 1]].push(student)
+        }
+      }
+
+      console.log(`📊 Students per group (balanced):`, configuredGroupNames.map(l => `${l}: ${balancedGroups[l]?.length || 0}`).join(', '))
 
       // Create groups only for groups that have students (or specificGroups if provided)
       const groups: {
@@ -131,10 +185,10 @@ export class GenerateAllSchedulesService {
         }
       } = {}
 
-      const groupsToGenerate = specificGroups || Object.keys(studentsByGroup)
+      const allGroupLetters = specificGroups || configuredGroupNames
       
-      for (const groupLetter of groupsToGenerate) {
-        const studentsInGroup = studentsByGroup[groupLetter] || []
+      for (const groupLetter of allGroupLetters) {
+        const studentsInGroup = balancedGroups[groupLetter] || []
         
         if (studentsInGroup.length === 0) {
           console.warn(`⚠️ No students in Group ${groupLetter}, skipping schedule generation`)
@@ -169,10 +223,24 @@ export class GenerateAllSchedulesService {
           group.student_count,
           groupName,
           level,
-          occupiedSlots
+          occupiedSlots,
+          preferenceAnalytics,
+          activeRules
         )
         
-        group.sections = groupSchedule
+        // Enforce 11:00-12:00 break by filtering out overlapping sections
+        const overlapsBreak = (start: string, end: string): boolean => {
+          const breakStart = '11:00'
+          const breakEnd = '12:00'
+          return (start >= breakStart && start < breakEnd) ||
+                 (end > breakStart && end <= breakEnd) ||
+                 (start < breakStart && end > breakEnd)
+        }
+        const filteredSchedule = groupSchedule.filter((s: any) => !overlapsBreak(s.start_time, s.end_time))
+        if (filteredSchedule.length !== groupSchedule.length) {
+          console.warn(`⏱️ Removed ${groupSchedule.length - filteredSchedule.length} section(s) in ${groupName} overlapping 11:00-12:00`)
+        }
+        group.sections = filteredSchedule
         console.log(`✅ ${groupName}: Assigned ${groupSchedule.length} sections`)
       }
 
@@ -286,11 +354,25 @@ export class GenerateAllSchedulesService {
     studentCount: number,
     groupName: string,
     level: number,
-    occupiedSlots: Array<{room: string, day: string, start: string, level: number, course: string}> = []
+    occupiedSlots: Array<{room: string, day: string, start: string, level: number, course: string}> = [],
+    preferenceAnalytics: any[] = [],
+    activeRules: string[] = []
   ): Promise<ScheduleSection[]> {
     
     console.log(`🤖 Starting AI generation for ${groupName} with ${courses.length} courses`)
+    console.log(`📊 Using ${preferenceAnalytics.length} preference-based elective constraints`)
+    console.log(`📋 Applying ${activeRules.length} active scheduling rules`)
     
+    // Split courses by type to ensure compulsory coverage
+    const compulsoryCourses = courses.filter((c: any) => {
+      const t = (c.course_type || '').toString().toLowerCase()
+      return t !== 'elective' // default/unknown treated as compulsory
+    })
+    const electiveCourses = courses.filter((c: any) => {
+      const t = (c.course_type || '').toString().toLowerCase()
+      return t === 'elective'
+    })
+
     // Get all available rooms (global pool)
     const allRooms = [
       'A101', 'A102', 'A103', 'A104', 'A105', 'A106',
@@ -335,7 +417,17 @@ export class GenerateAllSchedulesService {
         'Avoid scheduling all courses on the same day',
         '🔒 STRICTLY check room availability - rooms ARE used by other levels',
         'Distribute courses evenly across Monday-Thursday',
-        `${occupiedSlots.length} slots are ALREADY OCCUPIED - avoid them at ALL costs`
+        `${occupiedSlots.length} slots are ALREADY OCCUPIED - avoid them at ALL costs`,
+        ...activeRules, // 🆕 Include active scheduling rules
+        // 🆕 Add preference-based elective constraints
+        ...(preferenceAnalytics.length > 0 ? [
+          '\n🎯 ELECTIVE COURSES (PREFERENCE-DRIVEN):',
+          ...preferenceAnalytics.map(pref => 
+            `- Generate ${pref.sections_needed} section(s) of "${pref.course_title}" (${pref.course_code}) because ${pref.student_count} students requested it`
+          ),
+          'IMPORTANT: Only generate elective sections for courses that students have requested.',
+          'Do NOT create elective sections with zero student demand.'
+        ] : [])
       ],
       objective_priorities: {
         minimize_conflicts: true,
@@ -344,8 +436,8 @@ export class GenerateAllSchedulesService {
       }
     }
 
-    // Calculate students per course
-    courses.forEach(course => {
+    // Calculate students per elective course only for AI
+    electiveCourses.forEach(course => {
       constraints.students_per_course[course.code] = studentCount
     })
 
@@ -367,10 +459,22 @@ export class GenerateAllSchedulesService {
         return this.generateFallbackSchedule(courses, studentCount, groupName)
       }
       
-      // Convert AI recommendations to schedule sections with global room checking
+      // Convert AI recommendations to schedule sections with global and per-group checks
       const sections: ScheduleSection[] = []
+      const usedGroupSlots = new Set<string>() // per-group day-start uniqueness
+      const usedCourseCodes = new Set<string>() // prevent duplicate course in same group
       
       for (const rec of recommendations) {
+        // Prevent duplicate course in the same group
+        if (usedCourseCodes.has(rec.course_code)) {
+          console.warn(`⚠️ Skipping duplicate course ${rec.course_code} in ${groupName}`)
+          continue
+        }
+        const groupSlotKey = `${rec.timeslot.day}-${rec.timeslot.start}`
+        if (usedGroupSlots.has(groupSlotKey)) {
+          console.warn(`⚠️ Skipping time collision in ${groupName} at ${groupSlotKey}`)
+          continue
+        }
         // Check if room is available globally
         if (this.isRoomAvailableGlobally(rec.room, rec.timeslot.day, rec.timeslot.start)) {
           // Reserve the room globally
@@ -390,13 +494,62 @@ export class GenerateAllSchedulesService {
           }
           
           sections.push(section)
+          usedGroupSlots.add(groupSlotKey)
+          usedCourseCodes.add(rec.course_code)
           console.log(`✅ Reserved ${rec.room} for ${rec.course_code} on ${rec.timeslot.day} ${rec.timeslot.start}`)
         } else {
           console.warn(`⚠️ Room ${rec.room} not available for ${rec.course_code} on ${rec.timeslot.day} ${rec.timeslot.start}, skipping`)
         }
       }
 
-      console.log(`✅ ${groupName}: Generated ${sections.length} sections using AI`)
+      // Ensure ALL compulsory courses are present (AI returns electives only)
+      const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday']
+      const timeSlots = [
+        { start: '08:00', end: '09:30' },
+        { start: '09:30', end: '11:00' },
+        { start: '11:00', end: '12:30' },
+        { start: '12:30', end: '14:00' },
+        { start: '14:00', end: '15:30' },
+        { start: '15:30', end: '17:00' }
+      ]
+      let offset = 0
+      for (const course of compulsoryCourses) {
+        if (usedCourseCodes.has(course.code)) continue
+        let placed = false
+        for (let i = 0; i < days.length * timeSlots.length; i++) {
+          const day = days[(i + offset) % days.length]
+          const slot = timeSlots[(i + offset) % timeSlots.length]
+          const key = `${day}-${slot.start}`
+          const isLab = !!course.is_lab || (course.code || '').toUpperCase().includes('LAB') || (course.title || '').toLowerCase().includes('lab')
+          const candidateRooms = allRooms.filter(r => isLab ? r.startsWith('LAB') : !r.startsWith('LAB'))
+          for (const room of candidateRooms) {
+            if (!usedGroupSlots.has(key) && this.isRoomAvailableGlobally(room, day, slot.start)) {
+              this.reserveRoomGlobally(room, day, slot.start)
+              sections.push({
+                course_code: course.code,
+                course_title: course.title,
+                section_label: this.getGroupSectionLabel(groupName),
+                day,
+                start_time: slot.start,
+                end_time: slot.end,
+                room,
+                instructor: `Dr. ${course.code}`,
+                student_count: Math.min(studentCount, 30),
+                capacity: 30
+              })
+              usedGroupSlots.add(key)
+              usedCourseCodes.add(course.code)
+              placed = true
+              break
+            }
+          }
+          if (placed) break
+        }
+        if (!placed) console.warn(`⚠️ Could not place compulsory course ${course.code} for ${groupName}`)
+        offset++
+      }
+
+      console.log(`✅ ${groupName}: Generated ${sections.length} sections (compulsory + electives)`)
       return sections
 
     } catch (aiError) {
@@ -442,14 +595,15 @@ export class GenerateAllSchedulesService {
   ): ScheduleSection[] {
     console.log(`🔄 Creating fallback schedule for ${groupName} with ${courses.length} courses`)
     
+    // Enforce system policy: afternoon-only, Monday-Thursday
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday']
     const timeSlots = [
-      { start: '08:00', end: '09:00' },
-      { start: '09:00', end: '10:00' },
-      { start: '10:00', end: '11:00' },
-      { start: '13:00', end: '14:00' },
-      { start: '14:00', end: '15:00' },
-      { start: '15:00', end: '16:00' }
+      { start: '08:00', end: '09:30' },
+      { start: '09:30', end: '11:00' },
+      { start: '11:00', end: '12:30' },
+      { start: '12:30', end: '14:00' },
+      { start: '14:00', end: '15:30' },
+      { start: '15:30', end: '17:00' }
     ]
     
     // Get all available rooms (global pool)
@@ -468,46 +622,62 @@ export class GenerateAllSchedulesService {
     const groupOffset = this.getGroupTimeOffset(groupName)
 
     const sections: ScheduleSection[] = []
-    
+    const usedGroupSlots = new Set<string>() // ensure no two courses for same group at same day-start
+
+    // Precompute all slots (Mon-Thu x 4)
+    const allSlots: Array<{ day: string; start: string; end: string }> = []
+    for (const d of days) {
+      for (const s of timeSlots) {
+        allSlots.push({ day: d, start: s.start, end: s.end })
+      }
+    }
+
+    let slotCursor = groupOffset % allSlots.length
+
     for (let index = 0; index < courses.length; index++) {
       const course = courses[index]
-      const dayIndex = (index + groupOffset) % days.length
-      const timeIndex = (index + groupOffset) % timeSlots.length
-      
-      const isLab = course.code.includes('LAB') || course.title.toLowerCase().includes('lab')
+      const isLab = (course.code || '').toUpperCase().includes('LAB') || (course.title || '').toLowerCase().includes('lab')
       const availableRooms = isLab ? labRooms : lectureRooms
-      
-      // Find an available room
-      let selectedRoom = null
-      for (const room of availableRooms) {
-        if (this.isRoomAvailableGlobally(room, days[dayIndex], timeSlots[timeIndex].start)) {
-          selectedRoom = room
-          break
+
+      let placed = false
+      // Try up to allSlots.length positions to find a free group slot
+      for (let attempt = 0; attempt < allSlots.length && !placed; attempt++) {
+        const slot = allSlots[(slotCursor + attempt) % allSlots.length]
+        const groupKey = `${slot.day}-${slot.start}`
+        if (usedGroupSlots.has(groupKey)) continue
+
+        // Find a free room at this group slot
+        for (const room of availableRooms) {
+          if (this.isRoomAvailableGlobally(room, slot.day, slot.start)) {
+            this.reserveRoomGlobally(room, slot.day, slot.start)
+            usedGroupSlots.add(groupKey)
+
+            const section: ScheduleSection = {
+              course_code: course.code,
+              course_title: course.title,
+              section_label: this.getGroupSectionLabel(groupName),
+              day: slot.day,
+              start_time: slot.start,
+              end_time: slot.end,
+              room,
+              instructor: `Dr. ${course.code}`,
+              student_count: Math.min(studentCount, 30),
+              capacity: 30
+            }
+            sections.push(section)
+            console.log(`📚 Fallback section: ${course.code} - ${slot.day} ${slot.start} - ${room}`)
+            placed = true
+            break
+          }
         }
       }
-      
-      if (selectedRoom) {
-        // Reserve the room globally
-        this.reserveRoomGlobally(selectedRoom, days[dayIndex], timeSlots[timeIndex].start)
-        
-        const section: ScheduleSection = {
-          course_code: course.code,
-          course_title: course.title,
-          section_label: this.getGroupSectionLabel(groupName),
-          day: days[dayIndex],
-          start_time: timeSlots[timeIndex].start,
-          end_time: timeSlots[timeIndex].end,
-          room: selectedRoom,
-          instructor: `Dr. ${course.code}`,
-          student_count: Math.min(studentCount, 30),
-          capacity: 30
-        }
-        
-        sections.push(section)
-        console.log(`📚 Fallback section: ${course.code} - ${days[dayIndex]} ${timeSlots[timeIndex].start} - ${selectedRoom}`)
-      } else {
-        console.warn(`⚠️ No available room for ${course.code} on ${days[dayIndex]} ${timeSlots[timeIndex].start}`)
+
+      if (!placed) {
+        console.warn(`⚠️ No available unique group slot for ${course.code}; skipping`)
       }
+
+      // Advance cursor to vary distribution across groups
+      slotCursor = (slotCursor + 1) % allSlots.length
     }
 
     console.log(`✅ Fallback generated ${sections.length} sections for ${groupName}`)
@@ -553,7 +723,7 @@ export class GenerateAllSchedulesService {
       // Get all existing schedules from other levels
       const { data: existingSchedules } = await supabase
         .from('schedule_versions')
-        .select('level, diff_json')
+        .select('*')
         .neq('level', newSchedule.level)
 
       if (!existingSchedules || existingSchedules.length === 0) {
@@ -566,7 +736,7 @@ export class GenerateAllSchedulesService {
       const existingTimeSlots = new Map<string, { level: number, course: string }>()
       
       for (const schedule of existingSchedules) {
-        const groups = schedule.diff_json?.groups || {}
+        const groups = (schedule as any).groups || schedule.diff_json?.groups || {}
         for (const [groupName, groupData] of Object.entries(groups)) {
           for (const section of (groupData as any).sections || []) {
             const timeSlot = `${section.room}-${section.day}-${section.start_time}`
@@ -605,7 +775,7 @@ export class GenerateAllSchedulesService {
       // Get all existing schedules from other levels
       const { data: existingSchedules } = await supabase
         .from('schedule_versions')
-        .select('level, diff_json')
+        .select('*')
         .neq('level', schedule.level)
 
       if (!existingSchedules || existingSchedules.length === 0) {
@@ -616,7 +786,7 @@ export class GenerateAllSchedulesService {
       const occupiedSlots = new Map<string, { level: number, course: string }>()
       
       for (const existingSchedule of existingSchedules) {
-        const groups = existingSchedule.diff_json?.groups || {}
+        const groups = (existingSchedule as any).groups || existingSchedule.diff_json?.groups || {}
         for (const [groupName, groupData] of Object.entries(groups)) {
           for (const section of (groupData as any).sections || []) {
             const timeSlot = `${section.room}-${section.day}-${section.start_time}`
@@ -715,50 +885,40 @@ export class GenerateAllSchedulesService {
         throw new Error('Schedule level is required but was not provided')
       }
       
-      // Convert to the format expected by the existing database
-      const sections = Object.values(schedule.groups).flatMap(group => 
-        group.sections.map(section => ({
-          course_code: section.course_code,
-          section_label: section.section_label,
-          timeslot: {
-            day: section.day,
-            start: section.start_time,
-            end: section.end_time
-          },
-          room: section.room,
-          instructor_id: null,
-          student_count: section.student_count,
-          capacity: section.capacity
-        }))
-      )
-
-      console.log(`💾 Prepared ${sections.length} sections for database save`)
-
-      const semesterValue = `Level ${schedule.level}` || 'Unknown Level'
-      console.log(`💾 Using semester value: "${semesterValue}"`)
-      
-      const insertData = {
-        level: schedule.level,
-        semester: semesterValue,
-        diff_json: {
-          sections,
-          groups: schedule.groups,
-          conflicts: schedule.conflicts,
-          efficiency: schedule.efficiency,
-          status: 'draft',
-          generated_at: schedule.generated_at
-        },
-        author_id: null
+      // Final validation: ensure zero conflicts across rooms and per-group slots
+      const seenSlots = new Set<string>()
+      for (const [gName, g] of Object.entries(schedule.groups)) {
+        const seenGroupSlots = new Set<string>()
+        const seenCourses = new Set<string>()
+        ;(g as any).sections = (g as any).sections.filter((s: any) => {
+          const roomKey = `${s.room}-${s.day}-${s.start_time}`
+          const groupKey = `${s.day}-${s.start_time}`
+          if (seenSlots.has(roomKey) || seenGroupSlots.has(groupKey) || seenCourses.has(s.course_code)) {
+            console.warn(`🧹 Dropping conflicting/duplicate section ${s.course_code} @ ${roomKey} in ${gName}`)
+            return false
+          }
+          seenSlots.add(roomKey)
+          seenGroupSlots.add(groupKey)
+          seenCourses.add(s.course_code)
+          return true
+        })
       }
 
-      console.log(`💾 Insert data:`, JSON.stringify(insertData, null, 2))
+      const semester = await SystemSettingsService.getCurrentSemester()
 
-      console.log(`💾 About to insert into database with data:`, insertData)
-      console.log(`💾 Semester value being sent: "${insertData.semester}" (type: ${typeof insertData.semester})`)
+      const totalSections = Object.values(schedule.groups).reduce((sum: number, g: any) => sum + (g.sections?.length || 0), 0)
 
       const { data, error } = await supabase
         .from('schedule_versions')
-        .insert(insertData)
+        .insert({
+          level: schedule.level,
+          semester,
+          groups: schedule.groups,
+          total_sections: totalSections,
+          conflicts: schedule.conflicts,
+          efficiency: schedule.efficiency,
+          generated_at: schedule.generated_at
+        })
         .select()
 
       if (error) {
@@ -769,7 +929,7 @@ export class GenerateAllSchedulesService {
           hint: error.hint,
           code: error.code
         })
-        console.error(`❌ Insert data that failed:`, insertData)
+        // Insert payload is constructed inline above in .insert(); nothing else to print
         
         // If it's an RLS error, provide helpful message
         if (error.code === '42501' || error.message.includes('permission denied')) {
@@ -779,7 +939,7 @@ export class GenerateAllSchedulesService {
         
         // If it's a null constraint error, provide specific help
         if (error.message.includes('null value') && error.message.includes('semester')) {
-          console.error(`❌ Semester null constraint error. Insert data:`, insertData)
+          console.error(`❌ Semester null constraint error.`)
           throw new Error(`Semester field is null. This should not happen. Please check the console logs for details.`)
         }
         
@@ -800,37 +960,19 @@ export class GenerateAllSchedulesService {
   static async saveSchedulesToDatabase(schedules: GeneratedSchedule[]): Promise<void> {
     try {
       for (const schedule of schedules) {
-        // Convert to the format expected by the existing database
-        const sections = Object.values(schedule.groups).flatMap(group => 
-          group.sections.map(section => ({
-            course_code: section.course_code,
-            section_label: section.section_label,
-            timeslot: {
-              day: section.day,
-              start: section.start_time,
-              end: section.end_time
-            },
-            room: section.room,
-            instructor_id: null,
-            student_count: section.student_count,
-            capacity: section.capacity
-          }))
-        )
+        const semester = await SystemSettingsService.getCurrentSemester()
+        const totalSections = Object.values(schedule.groups).reduce((sum: number, g: any) => sum + (g.sections?.length || 0), 0)
 
         const { error } = await supabase
           .from('schedule_versions')
           .insert({
             level: schedule.level,
-            semester: `Level ${schedule.level}`, // Use level as semester
-            diff_json: {
-              sections,
-              groups: schedule.groups,
-              conflicts: schedule.conflicts,
-              efficiency: schedule.efficiency,
-              status: 'draft',
-              generated_at: schedule.generated_at
-            },
-            author_id: null
+            semester,
+            groups: schedule.groups,
+            total_sections: totalSections,
+            conflicts: schedule.conflicts,
+            efficiency: schedule.efficiency,
+            generated_at: schedule.generated_at
           })
 
         if (error) {
@@ -859,11 +1001,11 @@ export class GenerateAllSchedulesService {
       return (data || []).map(schedule => ({
         id: schedule.id,
         level: schedule.level,
-        groups: schedule.diff_json?.groups || {},
-        total_sections: schedule.diff_json?.total_sections || 0,
-        conflicts: schedule.diff_json?.conflicts || 0,
-        efficiency: schedule.diff_json?.efficiency || 0,
-        generated_at: schedule.created_at
+        groups: (schedule as any).groups || {},
+        total_sections: (schedule as any).total_sections || Object.values(((schedule as any).groups || {})).reduce((sum: number, g: any) => sum + (g.sections?.length || 0), 0),
+        conflicts: (schedule as any).conflicts || 0,
+        efficiency: (schedule as any).efficiency || 0,
+        generated_at: (schedule as any).generated_at || schedule.created_at
       }))
     } catch (error) {
       console.error('Error loading existing schedules:', error)
@@ -1179,24 +1321,39 @@ export class GenerateAllSchedulesService {
     groups: { letter: string; studentCount: number; hasSchedule: boolean }[]
   }> {
     try {
-      // Get students grouped by group letter
-      const { data: students, error: studentsError } = await supabase
+      // Count total students for this level
+      const { data: allStudents } = await supabase
         .from('students')
-        .select('student_group')
+        .select('id')
         .eq('level', level)
 
-      if (studentsError) throw studentsError
+      const totalStudents = (allStudents || []).length
 
-      const studentsByGroup = (students || []).reduce((acc: any, student: any) => {
-        const group = student.student_group || 'A'
-        acc[group] = (acc[group] || 0) + 1
-        return acc
-      }, {})
+      // Load level group settings
+      const { data: levelSettings } = await supabase
+        .from('level_group_settings')
+        .select('students_per_group, group_names')
+        .eq('level', level)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      const studentsPerGroup = (levelSettings as any)?.students_per_group || 25
+      const configuredGroupNames: string[] = (levelSettings as any)?.group_names || ['A','B','C']
+
+      // Compute balanced counts for display
+      let remaining = totalStudents
+      const balancedCounts: Record<string, number> = {}
+      for (const letter of configuredGroupNames) {
+        const take = Math.min(studentsPerGroup, remaining)
+        balancedCounts[letter] = take
+        remaining -= take
+      }
 
       // Check which groups have schedules
       const { data: schedules, error: schedulesError } = await supabase
         .from('schedule_versions')
-        .select('diff_json')
+        .select('groups')
         .eq('level', level)
         .order('created_at', { ascending: false })
         .limit(1)
@@ -1204,13 +1361,13 @@ export class GenerateAllSchedulesService {
       if (schedulesError) throw schedulesError
 
       const existingGroups = schedules && schedules.length > 0 
-        ? Object.keys(schedules[0].diff_json?.groups || {}).map(g => g.replace('Group ', ''))
+        ? Object.keys((schedules[0] as any).groups || {}).map(g => g.replace('Group ', ''))
         : []
 
-      // Build group statistics for A, B, C
-      const groups = ['A', 'B', 'C'].map(letter => ({
+      // Build group statistics using configured groups and balanced counts
+      const groups = configuredGroupNames.map(letter => ({
         letter,
-        studentCount: studentsByGroup[letter] || 0,
+        studentCount: balancedCounts[letter] || 0,
         hasSchedule: existingGroups.includes(letter)
       }))
 
@@ -1249,7 +1406,7 @@ export class GenerateAllSchedulesService {
     try {
       const { data: schedules, error } = await supabase
         .from('schedule_versions')
-        .select('level, diff_json')
+        .select('*')
         .neq('level', currentLevel)
         .order('created_at', { ascending: false })
       
@@ -1275,7 +1432,7 @@ export class GenerateAllSchedulesService {
 
       // Extract all time/room slots from all groups in all levels
       for (const [levelNum, schedule] of latestSchedulesByLevel.entries()) {
-        const groups = schedule.diff_json?.groups || {}
+        const groups = (schedule as any).groups || schedule.diff_json?.groups || {}
         
         for (const [groupName, groupData] of Object.entries(groups)) {
           const sections = (groupData as any).sections || []

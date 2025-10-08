@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Groq from 'groq-sdk'
 
+const groqApiKey = (process.env.GROQ_API_KEY || '').trim()
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY!,
+  apiKey: groqApiKey || undefined,
 })
 
 export async function POST(request: NextRequest) {
@@ -17,8 +18,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Ensure API key exists in production; return 500 if missing
-    if (!process.env.GROQ_API_KEY) {
-      return NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 500 })
+    if (!groqApiKey || !groqApiKey.startsWith('gsk_')) {
+      return NextResponse.json({ error: 'GROQ_API_KEY missing or malformed' }, { status: 500 })
     }
 
     const prompt = `

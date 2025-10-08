@@ -38,10 +38,10 @@ export class StudentScheduleService {
 
       console.log(`📚 Loading schedule for ${student.full_name} (Level ${student.level}, Group ${student.student_group})`)
 
-      // Get the latest schedule for this level
+      // Get the latest schedule for this level (new schema)
       const { data: scheduleVersion, error: scheduleError } = await supabase
         .from('schedule_versions')
-        .select('id, diff_json')
+        .select('id, level, semester, groups, created_at, generated_at')
         .eq('level', student.level)
         .order('created_at', { ascending: false })
         .limit(1)
@@ -63,7 +63,7 @@ export class StudentScheduleService {
 
       // Extract compulsory courses for student's group
       const groupKey = `Group ${student.student_group}`
-      const groupSchedule = scheduleVersion.diff_json?.groups?.[groupKey]
+      const groupSchedule = (scheduleVersion as any).groups?.[groupKey]
 
       if (groupSchedule && groupSchedule.sections) {
         console.log(`✅ Found ${groupSchedule.sections.length} compulsory courses for ${groupKey}`)
@@ -72,11 +72,11 @@ export class StudentScheduleService {
           // Get course details
           const { data: course } = await supabase
             .from('courses')
-            .select('code, title, credits, course_category')
+            .select('code, title, credits, course_type')
             .eq('code', section.course_code)
             .single()
 
-          if (course && course.course_category === 'compulsory') {
+          if (course && course.course_type === 'compulsory') {
             schedule.push({
               course_code: section.course_code,
               course_title: course.title || section.course_title || section.course_code,
@@ -96,9 +96,9 @@ export class StudentScheduleService {
       // Get student's selected electives
       const { data: electiveChoices, error: electivesError } = await supabase
         .from('elective_choices')
-        .select('course_id, preference_rank')
+        .select('course_id, priority')
         .eq('student_id', student.id)
-        .order('preference_rank')
+        .order('priority')
 
       if (!electivesError && electiveChoices && electiveChoices.length > 0) {
         console.log(`✅ Found ${electiveChoices.length} elective choices`)
@@ -116,8 +116,9 @@ export class StudentScheduleService {
             let electiveSection = null
 
             // Check all groups for this elective course
-            if (scheduleVersion.diff_json?.groups) {
-              for (const [gKey, gData] of Object.entries(scheduleVersion.diff_json.groups)) {
+            const groups = (scheduleVersion as any).groups
+            if (groups) {
+              for (const [gKey, gData] of Object.entries(groups as any)) {
                 const section = (gData as any).sections?.find((s: any) => s.course_code === course.code)
                 if (section) {
                   electiveSection = section

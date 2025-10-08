@@ -23,10 +23,22 @@ function formatTime12Hour(time24: string): string {
   return `${hours12}:${minutes.toString().padStart(2, '0')} ${period}`
 }
 
-// Get time slots in 12-hour format
-function getTimeSlots12Hour(): string[] {
-  const slots24 = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00']
-  return slots24.map(formatTime12Hour)
+// Derive time slots from schedule entries (unique sorted hour marks)
+function deriveTimeSlots(schedule: Array<{ timeslot?: any; day?: string; start_time?: string; end_time?: string }>): string[] {
+  const starts = new Set<string>()
+  schedule.forEach((entry: any) => {
+    const start = entry?.timeslot?.start || entry?.start_time
+    if (typeof start === 'string' && start.length >= 4) {
+      // use exact start time (HH:mm)
+      const [h, m] = start.split(':')
+      starts.add(`${h.padStart(2, '0')}:${m.padStart(2, '0')}`)
+    }
+  })
+  // Fallback sensible defaults if no entries
+  if (starts.size === 0) {
+    ;['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'].forEach(t => starts.add(t))
+  }
+  return Array.from(starts).sort().map(formatTime12Hour)
 }
 
 // Days of the week
@@ -64,8 +76,8 @@ export function generateTimetablePDF(
     yPos += 7
   }
   
-  // Create timetable grid data
-  const timeSlots = getTimeSlots12Hour()
+  // Create timetable grid data from actual schedule
+  const timeSlots = deriveTimeSlots(schedule as any)
   const tableData: string[][] = []
   
   // Header row
@@ -76,21 +88,22 @@ export function generateTimetablePDF(
     const row = [timeSlot]
     
     DAYS.forEach(day => {
-      // Find all schedule entries for this day/time (multiple groups can overlap)
-      const entries = schedule.filter(entry => {
-        const entryDay = entry.timeslot.day
-        const entryStartTime = formatTime12Hour(entry.timeslot.start)
-        return entryDay === day && entryStartTime === timeSlot
+      // Find all schedule entries for this day/time (multiple can overlap)
+      const entries = schedule.filter((entry: any) => {
+        const entryDay = entry?.timeslot?.day || entry?.day
+        const entryStart = entry?.timeslot?.start || entry?.start_time
+        return entryDay === day && formatTime12Hour(entryStart) === timeSlot
       })
       
       if (entries.length > 0) {
-        const cellContent = entries.map(entry => {
-          const endTime = formatTime12Hour(entry.timeslot.end)
+        const cellContent = entries.map((entry: any) => {
+          const start = entry?.timeslot?.start || entry?.start_time
+          const end = entry?.timeslot?.end || entry?.end_time
           return [
             `${entry.course_code}`,
             `Section ${entry.section_label}`,
             `Room ${entry.room}`,
-            `${timeSlot} - ${endTime}`
+            `${formatTime12Hour(start)} - ${formatTime12Hour(end)}`
           ].join('\n')
         }).join('\n\n---\n\n')
         

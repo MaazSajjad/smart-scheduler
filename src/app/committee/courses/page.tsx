@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { MainLayout } from '@/components/layout/MainLayout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,13 +39,16 @@ export default function CourseManagementPage() {
   const [success, setSuccess] = useState('')
   const [formLoading, setFormLoading] = useState(false)
 
+  // Local form type to support UI-only field `course_category`, mapped to `course_type` on submit
+  type CourseFormData = Omit<CreateCourseData, 'course_type'> & { course_category: 'compulsory' | 'elective' }
+
   // Form state
-  const [formData, setFormData] = useState<CreateCourseData>({
+  const [formData, setFormData] = useState<CourseFormData>({
     code: '',
     title: '',
     level: 1,
     is_fixed: false,
-    typical_duration: 60,
+    duration_hours: 1.5,
     allowable_rooms: [],
     course_category: 'compulsory',
     credits: 3,
@@ -83,14 +85,23 @@ export default function CourseManagementPage() {
     setSuccess('')
 
     try {
+      // Map course_category to course_type for database
+      const dataToSubmit = {
+        ...formData,
+        course_type: formData.course_category,
+        allowable_rooms: formData.allowable_rooms || [],
+        prerequisites: formData.prerequisites || []
+      }
+      delete (dataToSubmit as any).course_category
+
       if (editingCourse) {
         await CourseService.updateCourse({
           id: editingCourse.id,
-          ...formData
+          ...dataToSubmit
         })
         setSuccess('Course updated successfully!')
       } else {
-        await CourseService.createCourse(formData)
+        await CourseService.createCourse(dataToSubmit)
         setSuccess('Course created successfully!')
       }
       
@@ -123,9 +134,9 @@ export default function CourseManagementPage() {
       title: course.title,
       level: course.level,
       is_fixed: course.is_fixed,
-      typical_duration: course.typical_duration,
-      allowable_rooms: course.allowable_rooms,
-      course_category: (course as any).course_category || 'compulsory',
+      duration_hours: course.duration_hours,
+      allowable_rooms: course.allowable_rooms || [],
+      course_category: (course as any).course_category || (course as any).course_type || 'compulsory',
       credits: (course as any).credits || 3,
       prerequisites: (course as any).prerequisites || [],
       offered_semesters: (course as any).offered_semesters || ['Fall', 'Spring'],
@@ -140,7 +151,7 @@ export default function CourseManagementPage() {
       title: '',
       level: 1,
       is_fixed: false,
-      typical_duration: 60,
+      duration_hours: 1.5,
       allowable_rooms: [],
       course_category: 'compulsory',
       credits: 3,
@@ -154,10 +165,11 @@ export default function CourseManagementPage() {
   }
 
   const addRoom = () => {
-    if (roomInput.trim() && !formData.allowable_rooms.includes(roomInput.trim())) {
+    const rooms = formData.allowable_rooms || []
+    if (roomInput.trim() && !rooms.includes(roomInput.trim())) {
       setFormData({
         ...formData,
-        allowable_rooms: [...formData.allowable_rooms, roomInput.trim()]
+        allowable_rooms: [...rooms, roomInput.trim()]
       })
       setRoomInput('')
     }
@@ -166,7 +178,7 @@ export default function CourseManagementPage() {
   const removeRoom = (room: string) => {
     setFormData({
       ...formData,
-      allowable_rooms: formData.allowable_rooms.filter(r => r !== room)
+      allowable_rooms: (formData.allowable_rooms || []).filter(r => r !== room)
     })
   }
 
@@ -206,12 +218,11 @@ export default function CourseManagementPage() {
     const matchesSearch = course.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          course.title.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesLevel = levelFilter === 'all' || course.level.toString() === levelFilter
-    const matchesCategory = categoryFilter === 'all' || (course as any).course_category === categoryFilter
+    const matchesCategory = categoryFilter === 'all' || (course as any).course_type === categoryFilter
     return matchesSearch && matchesLevel && matchesCategory
   })
 
   return (
-    <MainLayout>
       <div className="p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -321,15 +332,16 @@ export default function CourseManagementPage() {
                     />
                   </div>
                   <div>
-                    <Label htmlFor="duration">Duration (minutes) *</Label>
+                    <Label htmlFor="duration">Duration (hours) *</Label>
                     <Input
                       id="duration"
                       type="number"
-                      value={formData.typical_duration}
-                      onChange={(e) => setFormData({...formData, typical_duration: parseInt(e.target.value)})}
-                      placeholder="90"
-                      min="30"
-                      max="180"
+                      value={formData.duration_hours}
+                      onChange={(e) => setFormData({...formData, duration_hours: parseFloat(e.target.value)})}
+                      placeholder="1.5"
+                      min="0.5"
+                      max="3"
+                      step="0.5"
                       required
                     />
                   </div>
@@ -429,7 +441,7 @@ export default function CourseManagementPage() {
                       Add
                     </Button>
                   </div>
-                  {formData.allowable_rooms.length > 0 && (
+                  {formData.allowable_rooms && formData.allowable_rooms.length > 0 && (
                     <div className="flex flex-wrap gap-2 mt-2">
                       {formData.allowable_rooms.map((room, index) => (
                         <Badge key={index} variant="secondary" className="flex items-center gap-1">
@@ -562,7 +574,7 @@ export default function CourseManagementPage() {
                     </TableRow>
                   ) : (
                     filteredCourses.map((course) => {
-                      const courseCategory = (course as any).course_category || 'compulsory'
+                      const courseCategory = (course as any).course_type || 'compulsory'
                       const credits = (course as any).credits || 3
                       const department = (course as any).department || 'N/A'
                       
@@ -582,7 +594,7 @@ export default function CourseManagementPage() {
                           <TableCell>
                             <div className="flex items-center">
                               <Clock className="mr-1 h-4 w-4 text-gray-400" />
-                              {course.typical_duration} min
+                              {course.duration_hours} hrs
                             </div>
                           </TableCell>
                           <TableCell className="text-sm">{department}</TableCell>
@@ -639,7 +651,7 @@ export default function CourseManagementPage() {
                 <CheckCircle className="h-8 w-8 text-green-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
-                    {courses.filter(c => (c as any).course_category === 'compulsory').length}
+                    {courses.filter(c => (c as any).course_type === 'compulsory').length}
                   </p>
                   <p className="text-sm text-gray-600">Compulsory</p>
                 </div>
@@ -652,7 +664,7 @@ export default function CourseManagementPage() {
                 <Users className="h-8 w-8 text-purple-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
-                    {courses.filter(c => (c as any).course_category === 'elective').length}
+                    {courses.filter(c => (c as any).course_type === 'elective').length}
                   </p>
                   <p className="text-sm text-gray-600">Electives</p>
                 </div>
@@ -687,6 +699,5 @@ export default function CourseManagementPage() {
           </Card>
         </div>
       </div>
-    </MainLayout>
   )
 }

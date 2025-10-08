@@ -26,7 +26,7 @@ export class SchedulingRulesService {
   static async getActiveRules(): Promise<SchedulingRule[]> {
     try {
       const { data, error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .select('*')
         .eq('is_active', true)
         .order('priority', { ascending: false })
@@ -47,7 +47,7 @@ export class SchedulingRulesService {
   static async getAllRules(): Promise<SchedulingRule[]> {
     try {
       const { data, error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .select('*')
         .order('priority', { ascending: false })
         .order('created_at', { ascending: true })
@@ -85,7 +85,7 @@ export class SchedulingRulesService {
   static async getRulesByCategory(category: string): Promise<SchedulingRule[]> {
     try {
       const { data, error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .select('*')
         .eq('rule_category', category)
         .eq('is_active', true)
@@ -106,7 +106,7 @@ export class SchedulingRulesService {
   static async createRule(ruleData: CreateRuleData, userId: string): Promise<SchedulingRule> {
     try {
       const { data, error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .insert({
           ...ruleData,
           created_by: userId,
@@ -130,7 +130,7 @@ export class SchedulingRulesService {
   static async updateRule(ruleId: string, updateData: Partial<CreateRuleData>): Promise<SchedulingRule> {
     try {
       const { data, error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .update(updateData)
         .eq('id', ruleId)
         .select()
@@ -151,7 +151,7 @@ export class SchedulingRulesService {
   static async deleteRule(ruleId: string): Promise<void> {
     try {
       const { error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .update({ is_active: false })
         .eq('id', ruleId)
 
@@ -168,7 +168,7 @@ export class SchedulingRulesService {
   static async permanentlyDeleteRule(ruleId: string): Promise<void> {
     try {
       const { error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .delete()
         .eq('id', ruleId)
 
@@ -185,7 +185,7 @@ export class SchedulingRulesService {
   static async activateRule(ruleId: string): Promise<void> {
     try {
       const { error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .update({ is_active: true })
         .eq('id', ruleId)
 
@@ -202,7 +202,7 @@ export class SchedulingRulesService {
   static async deactivateRule(ruleId: string): Promise<void> {
     try {
       const { error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .update({ is_active: false })
         .eq('id', ruleId)
 
@@ -219,7 +219,7 @@ export class SchedulingRulesService {
   static async bulkCreateRules(rules: CreateRuleData[], userId: string): Promise<SchedulingRule[]> {
     try {
       const { data, error } = await supabase
-        .from('scheduling_rules')
+        .from('rule_definitions')
         .insert(rules.map(rule => ({
           ...rule,
           created_by: userId,

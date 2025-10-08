@@ -2,17 +2,22 @@ import { supabase } from './supabase'
 
 export interface Rule {
   id: string
-  name: string
-  type: string
-  payload: any
+  rule_text?: string
+  rule_category?: string
+  priority?: number
+  is_active?: boolean
+  applies_to_levels?: number[]
+  created_by?: string
   created_at: string
   updated_at: string
 }
 
 export interface CreateRuleData {
-  name: string
-  type: string
-  payload: any
+  rule_text: string
+  rule_category: string
+  priority?: number
+  is_active?: boolean
+  applies_to_levels?: number[]
 }
 
 export interface UpdateRuleData extends Partial<CreateRuleData> {
@@ -22,7 +27,7 @@ export interface UpdateRuleData extends Partial<CreateRuleData> {
 export class RuleService {
   static async getAllRules(): Promise<Rule[]> {
     const { data, error } = await supabase
-      .from('rules')
+      .from('rule_definitions')
       .select('*')
       .order('created_at', { ascending: false })
 
@@ -32,7 +37,7 @@ export class RuleService {
 
   static async getRuleById(id: string): Promise<Rule | null> {
     const { data, error } = await supabase
-      .from('rules')
+      .from('rule_definitions')
       .select('*')
       .eq('id', id)
       .single()
@@ -43,7 +48,7 @@ export class RuleService {
 
   static async createRule(ruleData: CreateRuleData): Promise<Rule> {
     const { data, error } = await supabase
-      .from('rules')
+      .from('rule_definitions')
       .insert(ruleData)
       .select()
       .single()
@@ -55,7 +60,7 @@ export class RuleService {
   static async updateRule(ruleData: UpdateRuleData): Promise<Rule> {
     const { id, ...updateData } = ruleData
     const { data, error } = await supabase
-      .from('rules')
+      .from('rule_definitions')
       .update(updateData)
       .eq('id', id)
       .select()
@@ -67,7 +72,7 @@ export class RuleService {
 
   static async deleteRule(id: string): Promise<void> {
     const { error } = await supabase
-      .from('rules')
+      .from('rule_definitions')
       .delete()
       .eq('id', id)
 
@@ -76,7 +81,7 @@ export class RuleService {
 
   static async getRulesByType(type: string): Promise<Rule[]> {
     const { data, error } = await supabase
-      .from('rules')
+      .from('rule_definitions')
       .select('*')
       .eq('type', type)
       .order('created_at', { ascending: false })

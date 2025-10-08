@@ -43,7 +43,7 @@ export interface Course {
   title: string
   level: number
   is_fixed: boolean
-  typical_duration: number
+  duration_hours: number
   allowable_rooms: string[]
   created_at: string
   updated_at: string

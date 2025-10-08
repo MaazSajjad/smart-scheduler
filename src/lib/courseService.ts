@@ -6,9 +6,9 @@ export interface CreateCourseData {
   title: string
   level: number
   is_fixed: boolean
-  typical_duration: number
+  duration_hours: number
   allowable_rooms: string[]
-  course_category?: 'compulsory' | 'elective'
+  course_type?: 'compulsory' | 'elective'
   credits?: number
   prerequisites?: string[]
   offered_semesters?: string[]
@@ -94,7 +94,7 @@ export class CourseService {
     const { data, error } = await supabase
       .from('courses')
       .select('*')
-      .eq('course_category', category)
+      .eq('course_type', category)
       .order('level', { ascending: true })
       .order('code', { ascending: true })
 
@@ -107,7 +107,35 @@ export class CourseService {
       .from('courses')
       .select('*')
       .eq('level', level)
-      .eq('course_category', 'elective')
+      .eq('course_type', 'elective')
+      .order('code', { ascending: true })
+
+    if (error) throw error
+    return data || []
+  }
+
+  static async getElectivesForIrregularStudent(level: number): Promise<Course[]> {
+    // Irregular students can take electives from their level AND lower levels
+    const { data, error } = await supabase
+      .from('courses')
+      .select('*')
+      .eq('course_type', 'elective')
+      .lte('level', level) // level <= student's level (includes lower levels)
+      .order('level', { ascending: false }) // Show higher levels first
+      .order('code', { ascending: true })
+
+    if (error) throw error
+    return data || []
+  }
+
+  static async getElectivesForSpecificLevels(levels: number[]): Promise<Course[]> {
+    // Get electives from specific levels only
+    const { data, error } = await supabase
+      .from('courses')
+      .select('*')
+      .eq('course_type', 'elective')
+      .in('level', levels) // Only include specified levels
+      .order('level', { ascending: true }) // Show levels in order
       .order('code', { ascending: true })
 
     if (error) throw error
@@ -119,7 +147,7 @@ export class CourseService {
       .from('courses')
       .select('*')
       .eq('level', level)
-      .eq('course_category', 'compulsory')
+      .eq('course_type', 'compulsory')
       .order('code', { ascending: true })
 
     if (error) throw error

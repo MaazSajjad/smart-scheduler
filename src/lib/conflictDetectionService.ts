@@ -32,7 +32,7 @@ export class ConflictDetectionService {
       // Get all schedule versions
       const { data: schedules, error } = await supabase
         .from('schedule_versions')
-        .select('id, level, diff_json')
+        .select('id, level, groups')
         .order('created_at', { ascending: false })
 
       if (error || !schedules) {
@@ -65,7 +65,7 @@ export class ConflictDetectionService {
     const roomSlots = new Map<string, any[]>() // key: room-day-time, value: sections
 
     schedules.forEach(schedule => {
-      const groups = schedule.diff_json?.groups || {}
+      const groups = (schedule as any).groups || {}
       
       Object.entries(groups).forEach(([groupName, groupData]: [string, any]) => {
         const sections = groupData.sections || []

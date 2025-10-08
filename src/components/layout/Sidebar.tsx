@@ -88,14 +88,18 @@ export function Sidebar({ className }: SidebarProps) {
     // Admin menu items (shared by admin and scheduling_committee)
     const adminMenuItems = [
       ...baseItems,
+      { name: 'System Settings', href: '/committee/system-settings', icon: Settings },
+      { name: 'Preference Analytics', href: '/committee/preferences-analytics', icon: BarChart3 },
+      { name: 'Group Settings', href: '/committee/group-settings', icon: Users },
       { name: 'Generate All Schedules', href: '/committee/generate-all', icon: Calendar },
       // { name: 'Generate Schedule', href: '/committee/generate', icon: PlusCircle }, // DISABLED
       { name: 'Edit Schedule', href: '/committee/edit', icon: Edit3 },
       { name: 'Manage Rules', href: '/committee/rules', icon: Settings },
       { name: 'Course Management', href: '/committee/courses', icon: BookOpen },
       { name: 'Student Management', href: '/committee/students', icon: Users },
-      { name: 'Create Student', href: '/admin/create-student', icon: UserPlus },
-      { name: 'Bulk Auth Setup', href: '/admin/bulk-auth', icon: Users },
+      
+      { name: 'Create Irregular Student', href: '/committee/create-irregular-student', icon: AlertCircle },
+      
       { name: 'Create User', href: '/admin/create-user', icon: UserPlus },
       { name: 'Analytics', href: '/committee/analytics', icon: BarChart3 },
     ]
@@ -109,16 +113,15 @@ export function Sidebar({ className }: SidebarProps) {
         return [
           ...baseItems,
           { name: 'My Schedule', href: '/student/schedule', icon: Calendar },
-          { name: 'Elective Preferences', href: '/student/electives', icon: PlusCircle },
-          { name: 'Exam Schedule', href: '/student/exams', icon: FileText },
+          { name: 'Elective Preferences', href: '/student/electives', icon: BookOpen },
+          { name: 'All Group Schedules', href: '/student/all-schedules', icon: Eye },
         ]
       
       case 'faculty':
         return [
           ...baseItems,
-          { name: 'My Schedule', href: '/faculty/schedule', icon: Calendar },
-          { name: 'Student Lists', href: '/faculty/students', icon: Users },
-          { name: 'Feedback', href: '/faculty/feedback', icon: MessageSquare },
+          { name: 'View All Schedules', href: '/faculty/schedule', icon: Calendar },
+          { name: 'Submit Feedback', href: '/faculty/feedback', icon: MessageSquare },
         ]
       
       case 'teaching_load_committee':

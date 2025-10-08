@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { MainLayout } from '@/components/layout/MainLayout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -43,12 +42,12 @@ export default function RulesManagementPage() {
 
   // Form state
   const [formData, setFormData] = useState<CreateRuleData>({
-    name: '',
-    type: 'blackout',
-    payload: {}
+    rule_text: '',
+    rule_category: 'general',
+    priority: 1,
+    is_active: true,
+    applies_to_levels: [1, 2, 3, 4, 5, 6, 7, 8]
   })
-
-  const [payloadJson, setPayloadJson] = useState('{}')
 
   // Load rules on component mount
   useEffect(() => {
@@ -74,13 +73,8 @@ export default function RulesManagementPage() {
     setSuccess('')
 
     try {
-      // Parse JSON payload
-      const parsedPayload = JSON.parse(payloadJson)
-
-      const ruleData = {
-        ...formData,
-        payload: parsedPayload
-      }
+      // Use the form data directly
+      const ruleData = formData
 
       if (editingRule) {
         await RuleService.updateRule({
@@ -118,21 +112,23 @@ export default function RulesManagementPage() {
   const handleEdit = (rule: Rule) => {
     setEditingRule(rule)
     setFormData({
-      name: rule.name,
-      type: rule.type,
-      payload: rule.payload
+      rule_text: rule.rule_text || '',
+      rule_category: rule.rule_category || 'general',
+      priority: rule.priority || 1,
+      is_active: rule.is_active ?? true,
+      applies_to_levels: rule.applies_to_levels || [1, 2, 3, 4, 5, 6, 7, 8]
     })
-    setPayloadJson(JSON.stringify(rule.payload, null, 2))
     setIsAddDialogOpen(true)
   }
 
   const resetForm = () => {
     setFormData({
-      name: '',
-      type: 'blackout',
-      payload: {}
+      rule_text: '',
+      rule_category: 'general',
+      priority: 1,
+      is_active: true,
+      applies_to_levels: [1, 2, 3, 4, 5, 6, 7, 8]
     })
-    setPayloadJson('{}')
     setEditingRule(null)
   }
 
@@ -167,14 +163,15 @@ export default function RulesManagementPage() {
   }
 
   const filteredRules = rules.filter(rule => {
-    const matchesSearch = rule.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         rule.type.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesType = typeFilter === 'all' || rule.type === typeFilter
+    const ruleText = rule.rule_text || ''
+    const ruleCategory = rule.rule_category || ''
+    const matchesSearch = ruleText.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         ruleCategory.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesType = typeFilter === 'all' || ruleCategory === typeFilter
     return matchesSearch && matchesType
   })
 
   return (
-    <MainLayout>
       <div className="p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -217,44 +214,50 @@ export default function RulesManagementPage() {
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <Label htmlFor="name">Rule Name *</Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) => setFormData({...formData, name: e.target.value})}
-                    placeholder="e.g., No Friday Classes"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="type">Rule Type *</Label>
-                  <Select value={formData.type} onValueChange={(value) => setFormData({...formData, type: value})}>
+                  <Label htmlFor="rule_category">Rule Category *</Label>
+                  <Select value={formData.rule_category} onValueChange={(value) => setFormData({...formData, rule_category: value})}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select rule type" />
+                      <SelectValue placeholder="Select rule category" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="blackout">Blackout Times</SelectItem>
-                      <SelectItem value="capacity">Room Capacity</SelectItem>
-                      <SelectItem value="room">Room Assignment</SelectItem>
-                      <SelectItem value="policy">General Policy</SelectItem>
-                      <SelectItem value="custom">Custom Rule</SelectItem>
+                      <SelectItem value="timing">Timing Rules</SelectItem>
+                      <SelectItem value="room">Room Rules</SelectItem>
+                      <SelectItem value="instructor">Instructor Rules</SelectItem>
+                      <SelectItem value="student">Student Rules</SelectItem>
+                      <SelectItem value="general">General Rules</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
                 <div>
-                  <Label htmlFor="payload">Rule Configuration (JSON) *</Label>
+                  <Label htmlFor="rule_text">Rule Description *</Label>
                   <Textarea
-                    id="payload"
-                    value={payloadJson}
-                    onChange={(e) => setPayloadJson(e.target.value)}
-                    placeholder='{"days": ["Friday"], "reason": "Prayer day"}'
-                    rows={6}
-                    className="font-mono text-sm"
+                    id="rule_text"
+                    value={formData.rule_text}
+                    onChange={(e) => setFormData({...formData, rule_text: e.target.value})}
+                    placeholder="e.g., No classes should be scheduled on Fridays for prayer time"
+                    rows={4}
+                    className="text-sm"
+                    required
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Enter valid JSON configuration for this rule
+                    Describe the rule in simple text. AI will automatically consider this when generating schedules.
+                  </p>
+                </div>
+
+                <div>
+                  <Label htmlFor="priority">Priority</Label>
+                  <Input
+                    id="priority"
+                    type="number"
+                    value={formData.priority}
+                    onChange={(e) => setFormData({...formData, priority: parseInt(e.target.value) || 1})}
+                    placeholder="1"
+                    min="1"
+                    max="10"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Higher numbers = higher priority (1-10)
                   </p>
                 </div>
 
@@ -300,12 +303,12 @@ export default function RulesManagementPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Types</SelectItem>
-                    <SelectItem value="blackout">Blackout</SelectItem>
-                    <SelectItem value="capacity">Capacity</SelectItem>
+                    <SelectItem value="all">All Categories</SelectItem>
+                    <SelectItem value="timing">Timing</SelectItem>
                     <SelectItem value="room">Room</SelectItem>
-                    <SelectItem value="policy">Policy</SelectItem>
-                    <SelectItem value="custom">Custom</SelectItem>
+                    <SelectItem value="instructor">Instructor</SelectItem>
+                    <SelectItem value="student">Student</SelectItem>
+                    <SelectItem value="general">General</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -344,9 +347,9 @@ export default function RulesManagementPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Configuration</TableHead>
+                    <TableHead>Rule Description</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -361,21 +364,29 @@ export default function RulesManagementPage() {
                   ) : (
                     filteredRules.map((rule) => (
                       <TableRow key={rule.id}>
-                        <TableCell className="font-medium">{rule.name}</TableCell>
+                        <TableCell className="font-medium">
+                          <div className="max-w-xs">
+                            <p className="text-sm font-medium text-gray-900">
+                              {rule.rule_text || 'No description'}
+                            </p>
+                          </div>
+                        </TableCell>
                         <TableCell>
-                          <Badge className={getRuleTypeColor(rule.type)}>
+                          <Badge className={getRuleTypeColor(rule.rule_category || 'general')}>
                             <div className="flex items-center space-x-1">
-                              {getRuleTypeIcon(rule.type)}
-                              <span className="capitalize">{rule.type}</span>
+                              {getRuleTypeIcon(rule.rule_category || 'general')}
+                              <span className="capitalize">{rule.rule_category || 'general'}</span>
                             </div>
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <div className="max-w-xs">
-                            <code className="text-xs bg-gray-100 p-1 rounded">
-                              {JSON.stringify(rule.payload).substring(0, 50)}
-                              {JSON.stringify(rule.payload).length > 50 && '...'}
-                            </code>
+                          <div className="flex items-center space-x-2">
+                            <Badge variant="outline" className="text-xs">
+                              Priority: {rule.priority || 1}
+                            </Badge>
+                            <Badge variant={rule.is_active ? "default" : "secondary"} className="text-xs">
+                              {rule.is_active ? 'Active' : 'Inactive'}
+                            </Badge>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -428,7 +439,7 @@ export default function RulesManagementPage() {
                 <Clock className="h-8 w-8 text-red-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
-                    {rules.filter(r => r.type === 'blackout').length}
+                    {rules.filter(r => (r as any).rule_category === 'timing').length}
                   </p>
                   <p className="text-sm text-gray-600">Blackout Rules</p>
                 </div>
@@ -441,7 +452,7 @@ export default function RulesManagementPage() {
                 <Users className="h-8 w-8 text-green-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
-                    {rules.filter(r => r.type === 'capacity').length}
+                    {rules.filter(r => (r as any).rule_category === 'room').length}
                   </p>
                   <p className="text-sm text-gray-600">Capacity Rules</p>
                 </div>
@@ -454,7 +465,7 @@ export default function RulesManagementPage() {
                 <Shield className="h-8 w-8 text-purple-600" />
                 <div className="ml-4">
                   <p className="text-2xl font-bold">
-                    {rules.filter(r => r.type === 'policy').length}
+                    {rules.filter(r => (r as any).rule_category === 'general').length}
                   </p>
                   <p className="text-sm text-gray-600">Policy Rules</p>
                 </div>
@@ -463,6 +474,5 @@ export default function RulesManagementPage() {
           </Card>
         </div>
       </div>
-    </MainLayout>
   )
 }

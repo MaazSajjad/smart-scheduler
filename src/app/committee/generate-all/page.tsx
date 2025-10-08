@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { MainLayout } from '@/components/layout/MainLayout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -89,7 +88,7 @@ export default function GenerateAllSchedulesPage() {
   const [resolvePrompt, setResolvePrompt] = useState('')
   const [resolvingConflicts, setResolvingConflicts] = useState(false)
 
-  const levelsAvailable = [1, 2, 3, 4]
+  const levelsAvailable = [1, 2, 3, 4, 5, 6, 7, 8]
 
   // Helper functions for per-schedule group selection
   const getSelectedGroupForSchedule = (scheduleId: string) => {
@@ -158,51 +157,31 @@ export default function GenerateAllSchedulesPage() {
       setLoading(true)
       setError(null)
       
-      // Direct Supabase query instead of using the service
+      // Fetch latest schedules (new schema uses top-level `groups`)
       const { data, error } = await supabase
         .from('schedule_versions')
-        .select('*')
+        .select('id, level, semester, groups, total_sections, conflicts, efficiency, generated_at, created_at')
         .order('created_at', { ascending: false })
 
       if (error) {
         throw new Error(`Failed to load schedules: ${error.message}`)
       }
 
-      // Convert raw data to GeneratedSchedule format and FILTER to only latest per level
+      // Convert raw data to GeneratedSchedule format and filter to only latest per level
       const allSchedules: GeneratedSchedule[] = (data || []).map(row => {
-        const diffJson = row.diff_json || {}
-        
-        // Handle both formats: diff_json.groups and diff_json.sections
-        let groups = {}
-        if (diffJson.groups) {
-          groups = diffJson.groups
-        } else if (diffJson.sections) {
-          // Convert sections array to groups format
-          const sectionsArray = Array.isArray(diffJson.sections) ? diffJson.sections : []
-          groups = {
-            'A': {
-              student_count: 30,
-              sections: sectionsArray.slice(0, Math.ceil(sectionsArray.length / 3))
-            },
-            'B': {
-              student_count: 30,
-              sections: sectionsArray.slice(Math.ceil(sectionsArray.length / 3), Math.ceil(sectionsArray.length * 2 / 3))
-            },
-            'C': {
-              student_count: 30,
-              sections: sectionsArray.slice(Math.ceil(sectionsArray.length * 2 / 3))
-            }
-          }
-        }
+        const groups = (row as any).groups || {}
+        const totalSections = (row as any).total_sections || Object.values(groups).reduce((acc: number, group: any) => acc + (group.sections?.length || 0), 0)
+        const conflicts = (row as any).conflicts || 0
+        const efficiency = (row as any).efficiency || 0
 
         return {
           id: row.id || `db-${row.created_at || Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           level: row.level || 1,
-          groups: groups,
-          total_sections: diffJson.total_sections || Object.values(groups).reduce((acc: number, group: any) => acc + (group.sections?.length || 0), 0),
-          conflicts: diffJson.conflicts || 0,
-          efficiency: diffJson.efficiency || 85,
-          generated_at: row.created_at || new Date().toISOString()
+          groups,
+          total_sections: totalSections,
+          conflicts,
+          efficiency,
+          generated_at: (row as any).generated_at || row.created_at || new Date().toISOString()
         }
       })
 
@@ -232,6 +211,35 @@ export default function GenerateAllSchedulesPage() {
       setError(`Failed to load schedules: ${error.message}`)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const generateAllLevels = async () => {
+    try {
+      setIsGenerating(true)
+      setError(null)
+      setSuccess(null)
+
+      const all = await GenerateAllSchedulesService.generateAllLevels()
+      // Replace existing with latest per level
+      const latestByLevel = new Map<number, GeneratedSchedule>()
+      all.forEach(s => {
+        const existing = latestByLevel.get(s.level)
+        if (!existing || new Date(s.generated_at) > new Date(existing.generated_at)) {
+          latestByLevel.set(s.level, s)
+        }
+      })
+      const updated = Array.from(latestByLevel.values()).sort((a,b)=>a.level-b.level)
+      setExistingSchedules(updated)
+      setSuccess('✅ Generated schedules for all levels with zero conflicts')
+
+      await loadGroupStatistics()
+      await loadConflicts()
+    } catch (e: any) {
+      setError(`❌ Failed to generate all levels: ${e.message}`)
+    } finally {
+      setIsGenerating(false)
+      setGeneratingLevel(null)
     }
   }
 
@@ -323,6 +331,27 @@ export default function GenerateAllSchedulesPage() {
       // Keep track of updates
       const updatedLevels: number[] = []
       
+      // Helper to get AI suggestions for a level's conflicts
+      const getAISuggestionsForLevel = async (level: number, levelConflicts: Conflict[], existingSchedule: GeneratedSchedule | undefined): Promise<string> => {
+        try {
+          if (!existingSchedule) return ''
+          const resp = await fetch('/api/resolve-conflicts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              conflicts: levelConflicts,
+              currentSchedule: existingSchedule
+            })
+          })
+          if (!resp.ok) return ''
+          const data = await resp.json()
+          return data.resolution || ''
+        } catch (e) {
+          console.warn('AI suggestion fetch failed:', e)
+          return ''
+        }
+      }
+
       // Regenerate schedules with conflict resolution prompt
       for (const level of levelsWithConflicts) {
         console.log(`\n🔧 Processing Level ${level} for conflict resolution...`)
@@ -330,10 +359,12 @@ export default function GenerateAllSchedulesPage() {
         const levelConflicts = conflicts.filter(c => c.affectedLevel === level)
         const conflictDescriptions = levelConflicts.map(c => c.description).join('\n')
         
-        const enhancedPrompt = `${resolvePrompt}\n\nCurrent conflicts to resolve:\n${conflictDescriptions}\n\nIMPORTANT: Avoid these specific conflicts when generating the schedule.`
-
         // Get existing schedule data
         const existingSchedule = existingSchedules.find(s => s.level === level)
+        // Fetch AI suggestions specific to this level's conflicts
+        const aiSuggestions = await getAISuggestionsForLevel(level, levelConflicts, existingSchedule)
+        const enhancedPrompt = `${resolvePrompt}\n\nCurrent conflicts to resolve:\n${conflictDescriptions}\n\nAI recommendations:\n${aiSuggestions}\n\nIMPORTANT: Avoid these specific conflicts when generating the schedule.`
+
         if (!existingSchedule) {
           console.warn(`⚠️ No existing schedule found in state for Level ${level}`)
           continue
@@ -667,7 +698,6 @@ export default function GenerateAllSchedulesPage() {
   }, [success, error])
 
   return (
-    <MainLayout>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -690,6 +720,19 @@ export default function GenerateAllSchedulesPage() {
             <Button onClick={loadExistingSchedules} variant="outline" size="sm">
               <RefreshCw className="h-4 w-4 mr-1" />
               Refresh
+            </Button>
+            <Button onClick={generateAllLevels} size="sm" disabled={isGenerating} className="bg-blue-600 hover:bg-blue-700">
+              {isGenerating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  Generating All...
+                </>
+              ) : (
+                <>
+                  <Brain className="h-4 w-4 mr-1" />
+                  Generate All
+                </>
+              )}
             </Button>
           </div>
         </div>
@@ -1386,6 +1429,5 @@ export default function GenerateAllSchedulesPage() {
           </div>
         )}
       </div>
-    </MainLayout>
   )
 }

@@ -10,6 +10,7 @@ import { CourseService } from '@/lib/courseService'
 import { supabase } from '@/lib/supabase'
 import { Course } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { SystemSettingsService } from '@/lib/systemSettingsService'
 import { 
   BookOpen, 
   Plus, 
@@ -22,74 +23,282 @@ import {
   Users
 } from 'lucide-react'
 
+// Extend Course with optional fields used for irregular/failed courses display
+type ExtendedCourse = Course & {
+  is_failed_course?: boolean
+  original_level?: number
+  failed_semester?: string
+  reason?: string
+}
+
 interface ElectiveChoice {
   id: string
   course_id: string
-  preference_rank: number
-  course: Course
+  priority: number
+  course: ExtendedCourse
 }
 
 export default function ElectivePreferencesPage() {
-  const [courses, setCourses] = useState<Course[]>([])
+  const [courses, setCourses] = useState<ExtendedCourse[]>([])
   const [selectedElectives, setSelectedElectives] = useState<ElectiveChoice[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const { user } = useAuth()
+  const [isIrregular, setIsIrregular] = useState(false)
+  const [preferenceCollectionOpen, setPreferenceCollectionOpen] = useState(false)
+  const [deadline, setDeadline] = useState('')
+  const [failedCourses, setFailedCourses] = useState<any[]>([])
+  const [studentLevel, setStudentLevel] = useState(1)
+  const { user, userRole } = useAuth()
 
   useEffect(() => {
-    loadData()
-  }, [])
+    if (user && userRole) {
+      loadData()
+    }
+  }, [user?.id, userRole])
 
-  const loadData = async () => {
+  const reloadPreferences = async () => {
+    if (!user?.id) return
+
     try {
-      setLoading(true)
-      
-      // Get student's level first
-      let studentLevel = 3 // default
-      if (user?.id) {
-        const { data: student } = await supabase
-          .from('students')
-          .select('level')
-          .eq('user_id', user.id)
-          .single()
-        
-        if (student) {
-          studentLevel = student.level
+      const { data: student } = await supabase
+        .from('students')
+        .select('id')
+        .eq('user_id', user.id)
+        .single()
+
+      if (student) {
+        const { data: preferences, error: preferencesError } = await supabase
+          .from('elective_choices')
+          .select(`
+            *,
+            courses(*)
+          `)
+          .eq('student_id', student.id)
+          .eq('semester', 'Fall 2025')
+          .order('priority')
+
+        if (preferencesError) {
+          console.error('❌ Reload preferences error:', preferencesError)
+        } else if (preferences && preferences.length > 0) {
+          console.log('✅ Reloaded preferences:', preferences)
+          setSelectedElectives(preferences.map(p => ({
+            id: p.id,
+            course_id: p.course_id,
+            priority: p.priority,
+            course: p.courses
+          })))
+        } else {
+          console.log('ℹ️ No preferences found after reload')
+          setSelectedElectives([])
         }
       }
+    } catch (error) {
+      console.error('Error reloading preferences:', error)
+    }
+  }
 
-      // Load elective courses for student's level using new course_category field
-      const electiveCourses = await CourseService.getElectivesByLevel(studentLevel)
-      setCourses(electiveCourses)
+  const loadSystemSettings = async () => {
+    try {
+      const isOpen = await SystemSettingsService.isPreferenceCollectionOpen()
+      const deadline = await SystemSettingsService.getPreferenceDeadline()
+      setPreferenceCollectionOpen(isOpen)
+      setDeadline(deadline || '')
+    } catch (error) {
+      console.error('Error loading system settings:', error)
+    }
+  }
+
+  const loadFailedCourses = async (studentId: string, studentLevel: number) => {
+    try {
+      console.log('🔍 Loading failed courses for student:', studentId)
+      
+      const { data: requirements, error } = await supabase
+        .from('irregular_course_requirements')
+        .select(`
+          *,
+          course:courses(id, code, title, level, credits)
+        `)
+        .eq('student_id', studentId)
+
+      if (error) {
+        console.error('❌ Error loading failed courses:', error)
+        console.error('Error details:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        })
+        
+        // If table doesn't exist, show empty array
+        if (error.code === 'PGRST116' || error.message.includes('relation') || error.message.includes('does not exist')) {
+          console.log('⚠️ irregular_course_requirements table may not exist yet')
+          setFailedCourses([])
+          // Load electives with just current level
+          await loadElectivesForIrregularStudent(studentLevel, [])
+          return
+        }
+        return
+      }
+
+      console.log('✅ Loaded failed courses:', requirements)
+      setFailedCourses(requirements || [])
+      
+      // Load electives based on failed courses
+      await loadElectivesForIrregularStudent(studentLevel, requirements || [])
+    } catch (error) {
+      console.error('❌ Exception loading failed courses:', error)
+      setFailedCourses([])
+      // Load electives with just current level
+      await loadElectivesForIrregularStudent(studentLevel, [])
+    }
+  }
+
+  const loadElectivesForIrregularStudent = async (studentLevel: number, failedCourses: any[]) => {
+    try {
+      console.log('🎯 Loading electives for irregular student')
+      console.log('Student Level:', studentLevel)
+      console.log('Failed Courses:', failedCourses)
+      
+      // Get current level electives
+      const currentLevelElectives = await CourseService.getElectivesByLevel(studentLevel)
+      console.log('Current level electives:', currentLevelElectives)
+      
+      // Get ALL failed courses (both compulsory and elective) - they can all be selected as electives
+      const failedCourseElectives = failedCourses
+        .filter(req => req.course) // Include all failed courses, not just electives
+        .map(req => ({
+          ...req.course,
+          is_failed_course: true,
+          original_level: req.original_level,
+          failed_semester: req.failed_semester,
+          reason: req.reason
+        }))
+      
+      console.log('Failed course electives:', failedCourseElectives)
+      
+      // Combine current level electives with failed course electives
+      const allElectives = [...currentLevelElectives, ...failedCourseElectives]
+      
+      // Remove duplicates based on course ID
+      const uniqueElectives = allElectives.filter((course, index, self) => 
+        index === self.findIndex(c => c.id === course.id)
+      )
+      
+      console.log('Final electives for irregular student:', uniqueElectives)
+      setCourses(uniqueElectives)
+    } catch (error) {
+      console.error('Error loading electives for irregular student:', error)
+      setCourses([])
+    }
+  }
+
+  const debugIrregularData = async () => {
+    if (!user?.id) return
+    
+    try {
+      const { data: student } = await supabase
+        .from('students')
+        .select('id, full_name, is_irregular, level')
+        .eq('user_id', user.id)
+        .single()
+
+      if (student) {
+        const response = await fetch(`/api/debug/irregular-requirements?studentId=${student.id}`)
+        const result = await response.json()
+        console.log('🔍 Debug result:', result)
+        alert(`Debug Result: ${JSON.stringify(result, null, 2)}`)
+      }
+    } catch (error) {
+      console.error('Debug error:', error)
+    }
+  }
+
+  const loadData = async () => {
+    if (!user?.id) {
+      console.log('⚠️ No user ID available, skipping loadData')
+      return
+    }
+
+    try {
+      setLoading(true)
+      console.log('🔄 Loading data for user:', user.id)
+      
+      // Load system settings first
+      await loadSystemSettings()
+      
+      // Get student's level and irregular status
+      const { data: student } = await supabase
+        .from('students')
+        .select('id, level, is_irregular')
+        .eq('user_id', user.id)
+        .single()
+        
+        if (student) {
+          setStudentLevel(student.level)
+          setIsIrregular(student.is_irregular || false)
+          
+          // Load failed courses for irregular students first
+          if (student.is_irregular) {
+            console.log('🔍 Loading failed courses for irregular student:', student.id)
+            await loadFailedCourses(student.id, student.level)
+          } else {
+            // Regular students can only take their exact level
+            const electiveCourses = await CourseService.getElectivesByLevel(student.level)
+            setCourses(electiveCourses)
+          }
+        }
 
       // Load existing preferences
       if (user?.id) {
-        const { data: student } = await supabase
+        console.log('🔍 Looking for student with user_id:', user.id)
+        
+        const { data: student, error: studentError } = await supabase
           .from('students')
-          .select('id')
+          .select('id, full_name, level')
           .eq('user_id', user.id)
           .single()
 
-        if (student) {
-          const { data: preferences } = await supabase
+        if (studentError) {
+          console.error('❌ Student lookup error:', studentError)
+        } else if (student) {
+          console.log('✅ Found student:', student)
+          console.log('🔍 Looking for preferences for student_id:', student.id)
+          
+          const { data: preferences, error: preferencesError } = await supabase
             .from('elective_choices')
             .select(`
               *,
               courses(*)
             `)
             .eq('student_id', student.id)
-            .order('preference_rank')
+            .eq('semester', 'Fall 2025')
+            .order('priority')
 
-          if (preferences) {
+          if (preferencesError) {
+            console.error('❌ Preferences query error:', preferencesError)
+          } else if (preferences && preferences.length > 0) {
+            console.log('✅ Loaded preferences:', preferences)
             setSelectedElectives(preferences.map(p => ({
               id: p.id,
               course_id: p.course_id,
-              preference_rank: p.preference_rank,
+              priority: p.priority,
               course: p.courses
             })))
+          } else {
+            console.log('ℹ️ No preferences found for student_id:', student.id, 'semester: Fall 2025')
+            
+            // Let's also check if there are ANY preferences for this student (any semester)
+            const { data: allPreferences } = await supabase
+              .from('elective_choices')
+              .select('*')
+              .eq('student_id', student.id)
+            
+            console.log('🔍 All preferences for this student (any semester):', allPreferences)
           }
+        } else {
+          console.log('❌ Student not found for user_id:', user.id)
         }
       }
     } catch (error: any) {
@@ -99,7 +308,12 @@ export default function ElectivePreferencesPage() {
     }
   }
 
-  const addElective = (course: Course) => {
+  const addElective = (course: ExtendedCourse) => {
+    if (!preferenceCollectionOpen) {
+      setError('Preference collection is currently closed. Please contact your administrator.')
+      return
+    }
+
     if (selectedElectives.length >= 5) {
       setError('You can select a maximum of 5 elective courses')
       return
@@ -114,7 +328,7 @@ export default function ElectivePreferencesPage() {
     const newElective: ElectiveChoice = {
       id: `temp-${Date.now()}`,
       course_id: course.id,
-      preference_rank: newRank,
+      priority: newRank,
       course
     }
 
@@ -125,7 +339,7 @@ export default function ElectivePreferencesPage() {
   const removeElective = (courseId: string) => {
     const updated = selectedElectives
       .filter(e => e.course_id !== courseId)
-      .map((e, index) => ({ ...e, preference_rank: index + 1 }))
+      .map((e, index) => ({ ...e, priority: index + 1 }))
     
     setSelectedElectives(updated)
   }
@@ -140,7 +354,7 @@ export default function ElectivePreferencesPage() {
     
     // Update ranks
     updated.forEach((e, i) => {
-      e.preference_rank = i + 1
+      e.priority = i + 1
     })
     
     setSelectedElectives(updated)
@@ -156,7 +370,7 @@ export default function ElectivePreferencesPage() {
     
     // Update ranks
     updated.forEach((e, i) => {
-      e.preference_rank = i + 1
+      e.priority = i + 1
     })
     
     setSelectedElectives(updated)
@@ -164,6 +378,12 @@ export default function ElectivePreferencesPage() {
 
   const savePreferences = async () => {
     if (!user?.id) return
+
+    // Check if preference collection is open
+    if (!preferenceCollectionOpen) {
+      setError('Preference collection is currently closed. Please contact your administrator.')
+      return
+    }
 
     try {
       setSaving(true)
@@ -181,26 +401,40 @@ export default function ElectivePreferencesPage() {
         throw new Error('Student record not found')
       }
 
-      // Delete existing preferences
+      // Delete existing preferences for this semester
       await supabase
         .from('elective_choices')
         .delete()
         .eq('student_id', student.id)
+        .eq('semester', 'Fall 2025')
 
       // Insert new preferences
       const preferences = selectedElectives.map(e => ({
         student_id: student.id,
         course_id: e.course_id,
-        preference_rank: e.preference_rank
+        priority: e.priority,
+        semester: 'Fall 2025' // Add required semester field
       }))
 
-      const { error } = await supabase
+      console.log('💾 Saving preferences:', preferences)
+
+      const { data: insertData, error } = await supabase
         .from('elective_choices')
         .insert(preferences)
+        .select()
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ Save error:', error)
+        throw error
+      }
 
+      console.log('✅ Preferences saved successfully:', insertData)
       setSuccess('Elective preferences saved successfully!')
+      
+      // Small delay to ensure database transaction is complete
+      setTimeout(async () => {
+        await reloadPreferences()
+      }, 500)
     } catch (error: any) {
       setError('Failed to save preferences: ' + error.message)
     } finally {
@@ -236,12 +470,125 @@ export default function ElectivePreferencesPage() {
           </Alert>
         )}
 
+        {/* Preference Collection Status */}
+        <Alert variant={preferenceCollectionOpen ? "default" : "destructive"}>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <strong>Preference Collection Status:</strong>{' '}
+                {preferenceCollectionOpen ? (
+                  <span className="text-green-600 font-semibold">OPEN</span>
+                ) : (
+                  <span className="text-red-600 font-semibold">CLOSED</span>
+                )}
+                {deadline && (
+                  <span className="block text-sm mt-1">
+                    Deadline: {new Date(deadline).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+            </div>
+          </AlertDescription>
+        </Alert>
+
+        {/* Failed Courses for Irregular Students */}
+        {isIrregular && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertCircle className="h-5 w-5 text-orange-600" />
+                Failed Courses to Retake
+              </CardTitle>
+              <CardDescription>
+                These are the courses you need to retake from previous levels
+              </CardDescription>
+              <div className="flex justify-end">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={debugIrregularData}
+                  className="text-xs"
+                >
+                  🔍 Debug Data
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {failedCourses.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {failedCourses.map((req, index) => (
+                      <div key={index} className="p-4 border border-orange-200 bg-orange-50 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <Badge variant="outline" className="bg-orange-100 text-orange-800">
+                            Level {req.original_level}
+                          </Badge>
+                          <Badge variant="secondary" className="text-xs">
+                            {req.reason}
+                          </Badge>
+                        </div>
+                        <h4 className="font-medium text-sm">{req.course?.code}</h4>
+                        <p className="text-xs text-gray-600 mb-2">{req.course?.title}</p>
+                        <div className="flex items-center justify-between text-xs text-gray-500">
+                          <span>{req.course?.credits} credits</span>
+                          {req.failed_semester && (
+                            <span>Failed: {req.failed_semester}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-800">
+                      <strong>Note:</strong> These failed courses are shown above for reference. 
+                      You can select them as electives in the section below, along with your current level electives.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-8">
+                  <AlertCircle className="h-12 w-12 mx-auto mb-4 text-orange-300" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No Failed Courses</h3>
+                  <p className="text-gray-600 mb-4">
+                    You don't have any failed courses to retake yet. You can select electives from your current level below.
+                  </p>
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-800">
+                      <strong>Note:</strong> As an irregular student, you can select electives from your current level and any failed courses.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Available Courses */}
           <Card>
             <CardHeader>
               <CardTitle>Available Elective Courses</CardTitle>
-              <CardDescription>Click to add courses to your preferences</CardDescription>
+              <CardDescription>
+                Click to add courses to your preferences
+                {isIrregular && (
+                  <div className="mt-2 space-y-1">
+                    <span className="block text-blue-600 text-sm">
+                      📚 As an irregular student, you can select from your current level electives and your failed courses (both compulsory and elective)
+                    </span>
+                    <div className="flex gap-4 text-xs">
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 bg-blue-100 border border-blue-300 rounded"></div>
+                        <span>Current Level Electives</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 bg-red-100 border border-red-300 rounded"></div>
+                        <span>Failed Courses (Selectable)</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -254,24 +601,39 @@ export default function ElectivePreferencesPage() {
                   {courses.map((course) => (
                     <div
                       key={course.id}
-                      className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                        selectedElectives.some(e => e.course_id === course.id)
-                          ? 'border-green-200 bg-green-50'
-                          : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
+                      className={`p-4 border rounded-lg transition-colors ${
+                        !preferenceCollectionOpen
+                          ? 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-60'
+                          : selectedElectives.some(e => e.course_id === course.id)
+                          ? 'border-green-200 bg-green-50 cursor-pointer'
+                          : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer'
                       }`}
-                      onClick={() => addElective(course)}
+                      onClick={() => preferenceCollectionOpen && addElective(course)}
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <h4 className="font-medium">{course.code} - {course.title}</h4>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-medium">{course.code} - {course.title}</h4>
+                            <Badge 
+                              variant="outline" 
+                              className={`text-xs ${
+                                course.is_failed_course
+                                  ? 'bg-red-100 text-red-800 border-red-300' 
+                                  : 'bg-blue-100 text-blue-800 border-blue-300'
+                              }`}
+                            >
+                              Level {course.level}
+                              {course.is_failed_course ? ' (Failed - Selectable)' : ' (Current Level)'}
+                            </Badge>
+                          </div>
                           <div className="flex items-center space-x-4 mt-1 text-sm text-gray-600">
                             <div className="flex items-center">
                               <Clock className="h-4 w-4 mr-1" />
-                              {course.typical_duration} min
+                              {course.duration_hours} hours
                             </div>
                             <div className="flex items-center">
                               <Users className="h-4 w-4 mr-1" />
-                              Level {course.level}
+                              {(course as any).credits || 3} credits
                             </div>
                           </div>
                         </div>
@@ -325,7 +687,7 @@ export default function ElectivePreferencesPage() {
                           </div>
                           <div>
                             <div className="flex items-center space-x-2">
-                              <Badge variant="secondary">#{elective.preference_rank}</Badge>
+                              <Badge variant="secondary">#{elective.priority}</Badge>
                               <h4 className="font-medium">{elective.course.code}</h4>
                             </div>
                             <p className="text-sm text-gray-600">{elective.course.title}</p>
@@ -349,7 +711,7 @@ export default function ElectivePreferencesPage() {
                 <div className="mt-6 pt-4 border-t">
                   <Button 
                     onClick={savePreferences} 
-                    disabled={saving}
+                    disabled={saving || !preferenceCollectionOpen}
                     className="w-full"
                   >
                     {saving ? (
@@ -364,6 +726,11 @@ export default function ElectivePreferencesPage() {
                       </>
                     )}
                   </Button>
+                  {!preferenceCollectionOpen && (
+                    <p className="text-sm text-red-600 mt-2 text-center">
+                      ⚠️ Preference collection is currently closed
+                    </p>
+                  )}
                 </div>
               )}
             </CardContent>

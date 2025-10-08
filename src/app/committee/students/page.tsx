@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { MainLayout } from '@/components/layout/MainLayout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -142,7 +141,6 @@ export default function StudentManagementPage() {
   })
 
   return (
-    <MainLayout>
       <div className="p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -432,6 +430,5 @@ export default function StudentManagementPage() {
           </Card>
         </div>
       </div>
-    </MainLayout>
   )
 }

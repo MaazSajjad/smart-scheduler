@@ -38,14 +38,22 @@ export const getScheduleRecommendation = async (
     })
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+      try {
+        const maybeJson = await response.json().catch(async () => ({ raw: await response.text() }))
+        console.error('AI API returned non-OK status:', response.status, maybeJson)
+      } catch (e) {
+        console.error('AI API non-OK and body parse failed:', e)
+      }
+      // Be tolerant: return empty recommendations so generation can fallback
+      return []
     }
 
     const data = await response.json()
     return data.recommendations
   } catch (error) {
     console.error('Error getting schedule recommendation:', error)
-    throw new Error('Failed to generate schedule recommendation')
+    // Be tolerant: return empty so caller can use fallback logic
+    return []
   }
 }
 

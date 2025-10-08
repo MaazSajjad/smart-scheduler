@@ -14,6 +14,8 @@ export interface TimetableEntry {
   instructor_id?: string
   student_count?: number
   capacity?: number
+  // Optional flags for student preference coloring
+  is_student_preference?: boolean
 }
 
 interface TimetableViewProps {
@@ -35,16 +37,29 @@ function formatTime12Hour(time24: string): string {
   return `${hours12}:${minutes.toString().padStart(2, '0')} ${period}`
 }
 
-// Get time slots in 12-hour format
-function getTimeSlots12Hour(): string[] {
-  const slots24 = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00']
+// Get time slots from schedule dynamically (fallback to sensible defaults)
+function getTimeSlots12Hour(schedule: TimetableEntry[]): string[] {
+  const uniqueStarts = Array.from(
+    new Set(
+      (schedule || [])
+        .map(e => e?.timeslot?.start)
+        .filter(Boolean) as string[]
+    )
+  )
+  if (uniqueStarts.length > 0) {
+    // Sort by time HH:MM
+    uniqueStarts.sort((a, b) => a.localeCompare(b))
+    return uniqueStarts.map(formatTime12Hour)
+  }
+  // Fallback (common academic slots)
+  const slots24 = ['12:00', '13:30', '15:00', '16:30']
   return slots24.map(formatTime12Hour)
 }
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 
 export function TimetableView({ schedule, title = "Class Timetable", studentInfo }: TimetableViewProps) {
-  const timeSlots = getTimeSlots12Hour()
+  const timeSlots = getTimeSlots12Hour(schedule)
 
   const getSectionsAtTime = (day: string, timeSlot: string) => {
     return schedule.filter(entry => {
@@ -99,29 +114,50 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
                       <td key={`${day}-${timeSlot}`} className="border border-gray-300 px-2 py-2 text-center align-top">
                         {sections.length > 0 ? (
                           <div className="text-xs leading-tight space-y-1">
-                            {sections.map((section, sectionIndex) => (
-                              <div 
-                                key={`${section.course_code}-${section.section_label}-${sectionIndex}`}
-                                className={`p-2 rounded border ${
-                                  sections.length > 1 
-                                    ? 'bg-blue-50 border-blue-200 mb-1' 
-                                    : 'bg-white border-gray-200'
-                                }`}
-                              >
-                                <div className="font-bold text-gray-900">{section.course_code}</div>
-                                <div className="text-gray-700">Section {section.section_label}</div>
-                                <div className="text-gray-600">Room {section.room}</div>
-                                <div className="text-gray-500">
-                                  {formatTime12Hour(section.timeslot.start)} - {formatTime12Hour(section.timeslot.end)}
+                            {sections.map((section, sectionIndex) => {
+                              // Determine background color based on student preference
+                              let bgColor = 'bg-white border-gray-200'
+                              let textColor = 'text-gray-900'
+                              
+                              if (section.is_student_preference === true) {
+                                // Green for student's selected preferences
+                                bgColor = 'bg-green-100 border-green-400'
+                                textColor = 'text-green-900'
+                              } else if (section.is_student_preference === false) {
+                                // Red/Light for courses NOT selected by student
+                                bgColor = 'bg-red-50 border-red-200'
+                                textColor = 'text-red-700'
+                              } else if (sections.length > 1) {
+                                // Blue for multiple groups (current level)
+                                bgColor = 'bg-blue-50 border-blue-200'
+                                textColor = 'text-gray-900'
+                              }
+                              
+                              return (
+                                <div 
+                                  key={`${section.course_code}-${section.section_label}-${sectionIndex}`}
+                                  className={`p-2 rounded border ${bgColor} mb-1`}
+                                >
+                                  <div className={`font-bold ${textColor}`}>{section.course_code}</div>
+                                  <div className={textColor}>Section {section.section_label}</div>
+                                  <div className={textColor}>Room {section.room}</div>
+                                  <div className={textColor}>
+                                    {formatTime12Hour(section.timeslot.start)} - {formatTime12Hour(section.timeslot.end)}
+                                  </div>
+                                  {section.instructor_id && section.instructor_id !== 'TBA' && (
+                                    <div className={`${textColor} italic`}>{section.instructor_id}</div>
+                                  )}
+                                  {section.is_student_preference === true && (
+                                    <div className="text-xs text-green-700 font-semibold mt-1">
+                                      ✓ Your Course
+                                    </div>
+                                  )}
+                                  {sections.length > 1 && sectionIndex < sections.length - 1 && (
+                                    <div className="border-t border-gray-300 mt-1 pt-1"></div>
+                                  )}
                                 </div>
-                                {section.instructor_id && section.instructor_id !== 'TBA' && (
-                                  <div className="text-gray-500 italic">{section.instructor_id}</div>
-                                )}
-                                {sections.length > 1 && sectionIndex < sections.length - 1 && (
-                                  <div className="border-t border-blue-300 mt-1 pt-1"></div>
-                                )}
-                              </div>
-                            ))}
+                              )
+                            })}
                             {sections.length > 1 && (
                               <div className="text-xs text-blue-600 font-semibold mt-1">
                                 {sections.length} groups

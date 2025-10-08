@@ -11,6 +11,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { supabase } from '@/lib/supabase'
+import { SystemSettingsService } from '@/lib/systemSettingsService'
 import { 
   Calendar, 
   Clock, 
@@ -31,12 +33,16 @@ export default function StudentSchedulePage() {
   const [conflicts, setConflicts] = useState<string[]>([])
   const [error, setError] = useState('')
   const [scheduleVersionId, setScheduleVersionId] = useState<string | null>(null)
+  const [currentLevelSections, setCurrentLevelSections] = useState<any[]>([])
+  const [preferenceSections, setPreferenceSections] = useState<any[]>([])
+  const [sectionsByLevel, setSectionsByLevel] = useState<{ [level: number]: any[] }>({})
+  const [totalCourses, setTotalCourses] = useState(0)
 
   useEffect(() => {
     if (user?.id) {
       loadStudentSchedule()
     }
-  }, [user])
+  }, [user?.id])
 
   const loadStudentSchedule = async () => {
     if (!user?.id) return
@@ -45,28 +51,105 @@ export default function StudentSchedulePage() {
       setLoading(true)
       setError('')
       
-      const { schedule, student: studentData, totalCredits: credits, scheduleVersionId: versionId } = await StudentScheduleService.getStudentSchedule(user.id)
-      
+      // First, check if student is irregular
+      const { data: studentData, error: studentError } = await supabase
+        .from('students')
+        .select('*')
+        .eq('user_id', user.id)
+        .single()
+
+      if (studentError) throw studentError
       setStudent(studentData)
-      setScheduleEntries(schedule)
-      setTotalCredits(credits)
-      setScheduleVersionId(versionId)
 
-      // Check for conflicts
-      const detectedConflicts = StudentScheduleService.detectConflicts(schedule)
-      setConflicts(detectedConflicts)
+      if (studentData.is_irregular) {
+        // Load irregular student schedule
+        await loadIrregularStudentSchedule(studentData)
+      } else {
+        // Load regular student schedule
+        const { schedule, totalCredits: credits, scheduleVersionId: versionId } = await StudentScheduleService.getStudentSchedule(user.id)
+        
+        setScheduleEntries(schedule)
+        setTotalCredits(credits)
+        setScheduleVersionId(versionId)
 
-      console.log('✅ Loaded schedule:', {
-        courses: schedule.length,
-        credits,
-        conflicts: detectedConflicts.length
-      })
+        // Check for conflicts
+        const detectedConflicts = StudentScheduleService.detectConflicts(schedule)
+        setConflicts(detectedConflicts)
+
+        console.log('✅ Loaded regular schedule:', {
+          courses: schedule.length,
+          credits,
+          conflicts: detectedConflicts.length
+        })
+      }
 
     } catch (error: any) {
       console.error('Error loading schedule:', error)
       setError(error.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadIrregularStudentSchedule = async (studentData: any) => {
+    try {
+      // Import irregular schedule service
+      const { IrregularScheduleService } = await import('@/lib/irregularScheduleService')
+      
+      // Get current semester
+      const currentSemester = await SystemSettingsService.getCurrentSemester()
+      
+      // Get irregular student's personalized schedule
+      const result = await IrregularScheduleService.getIrregularStudentSchedule(studentData.id, currentSemester)
+      
+      if (result) {
+        // Group sections by level
+        const grouped: { [level: number]: any[] } = {}
+        
+        // Add current level sections
+        if (result.currentLevelSections && result.currentLevelSections.length > 0) {
+          const level = studentData.level
+          grouped[level] = [...result.currentLevelSections]
+        }
+        
+        // Add preference sections grouped by their level
+        // Only add if they're NOT from the current level (to avoid duplicates)
+        if (result.preferenceSections && result.preferenceSections.length > 0) {
+          result.preferenceSections.forEach((section: any) => {
+            const level = section.course_level || section.level
+            
+            // Skip if this is the current level (already included in currentLevelSections)
+            if (level === studentData.level) {
+              return
+            }
+            
+            if (!grouped[level]) {
+              grouped[level] = []
+            }
+            grouped[level].push(section)
+          })
+        }
+        
+        setSectionsByLevel(grouped)
+        setCurrentLevelSections(result.currentLevelSections || [])
+        setPreferenceSections(result.preferenceSections || [])
+        setScheduleEntries(result.sections || [])
+        setTotalCredits(result.total_credits || 0)
+        setTotalCourses(result.total_courses || 0)
+        setScheduleVersionId(result.id)
+      } else {
+        // No schedule available
+        setSectionsByLevel({})
+        setCurrentLevelSections([])
+        setPreferenceSections([])
+        setScheduleEntries([])
+        setTotalCredits(0)
+        setTotalCourses(0)
+        setScheduleVersionId(null)
+      }
+    } catch (error: any) {
+      console.error('Error loading irregular schedule:', error)
+      setError('Failed to load irregular student schedule')
     }
   }
 
@@ -105,7 +188,7 @@ export default function StudentSchedulePage() {
             <h1 className="text-3xl font-bold text-gray-900">My Schedule</h1>
             {student && (
               <p className="text-gray-600">
-                Level {student.level} • Group {student.student_group} • {totalCredits} Credits
+                Level {student.level} • {student.is_irregular ? 'Irregular Student' : `Group ${student.student_group}`} • {totalCredits} Credits
               </p>
             )}
           </div>
@@ -141,14 +224,14 @@ export default function StudentSchedulePage() {
                   <div>
                     <h3 className="font-semibold">{student.full_name}</h3>
                     <p className="text-sm text-gray-600">
-                      {student.student_number} • Level {student.level} • Group {student.student_group}
+                      {student.student_number} • Level {student.level} • {student.is_irregular ? 'Irregular Student' : `Group ${student.student_group}`}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-6">
                   <div className="text-center">
                     <p className="text-sm text-gray-600">Total Courses</p>
-                    <p className="text-2xl font-bold text-blue-600">{scheduleEntries.length}</p>
+                    <p className="text-2xl font-bold text-blue-600">{student?.is_irregular ? totalCourses : scheduleEntries.length}</p>
                   </div>
                   <div className="text-center">
                     <p className="text-sm text-gray-600">Total Credits</p>
@@ -179,28 +262,125 @@ export default function StudentSchedulePage() {
               </Card>
             ) : scheduleEntries.length > 0 ? (
               <>
-                <TimetableView
-                  schedule={scheduleEntries.map(entry => ({
-                    course_code: entry.course_code,
-                    course_title: entry.course_title,
-                    section_label: entry.section_label,
-                    timeslot: {
-                      day: entry.day,
-                      start: entry.start_time,
-                      end: entry.end_time
-                    },
-                    room: entry.room,
-                    instructor_id: entry.instructor,
-                    student_count: 25,
-                    capacity: 30
-                  }))}
-                  title="My Weekly Schedule"
-                  studentInfo={student ? {
-                    name: student.full_name,
-                    level: student.level,
-                    studentNumber: student.student_number
-                  } : undefined}
-                />
+                {student?.is_irregular ? (
+                  <div className="space-y-6">
+                    {/* Student Info Alert */}
+                    <Alert>
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <strong>{student.full_name}</strong> ({student.student_number})
+                            <span className="ml-2 text-sm">Level {student.level} - Irregular Student</span>
+                          </div>
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+
+                    {/* Color Legend for Failed Course Levels */}
+                    {Object.keys(sectionsByLevel).length > 1 && (
+                      <Alert className="bg-blue-50 border-blue-200">
+                        <AlertCircle className="h-4 w-4 text-blue-600" />
+                        <AlertDescription>
+                          <p className="font-semibold text-blue-900 mb-2">Schedule Color Legend:</p>
+                          <div className="flex flex-wrap gap-4 text-sm">
+                            <div className="flex items-center gap-2">
+                              <div className="w-4 h-4 bg-green-100 border-2 border-green-400 rounded"></div>
+                              <span>Your Selected Failed Courses</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="w-4 h-4 bg-red-50 border-2 border-red-200 rounded"></div>
+                              <span>Other Courses (Not Selected)</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="w-4 h-4 bg-white border-2 border-gray-200 rounded"></div>
+                              <span>Current Level Courses</span>
+                            </div>
+                          </div>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    {/* Show timetable for each level */}
+                    {Object.keys(sectionsByLevel).sort((a, b) => Number(a) - Number(b)).map(levelStr => {
+                      const level = Number(levelStr)
+                      const sections = sectionsByLevel[level]
+                      const isCurrentLevel = level === student.level
+                      
+                      // Deduplicate sections before rendering
+                      const uniqueSections = sections.filter((section: any, index: number, self: any[]) => {
+                        const sectionKey = `${section.course_code}-${section.section_label}-${section.day}-${section.start_time}`
+                        return index === self.findIndex((s: any) => 
+                          `${s.course_code}-${s.section_label}-${s.day}-${s.start_time}` === sectionKey
+                        )
+                      })
+                      
+                      return (
+                        <div key={level}>
+                          <TimetableView
+                            schedule={uniqueSections.map((entry: any) => ({
+                              course_code: entry.course_code,
+                              course_title: entry.course_title,
+                              section_label: entry.section_label,
+                              timeslot: {
+                                day: entry.day,
+                                start: entry.start_time,
+                                end: entry.end_time
+                              },
+                              room: entry.room,
+                              instructor: entry.instructor,
+                              credits: entry.credits,
+                              is_student_preference: entry.is_student_preference
+                            }))}
+                            title={isCurrentLevel 
+                              ? `Level ${level} Schedule (Your Current Level)` 
+                              : `Level ${level} Schedule (Failed Courses)`
+                            }
+                            studentInfo={{
+                              name: student.full_name,
+                              level: student.level,
+                              studentNumber: student.student_number
+                            }}
+                          />
+                        </div>
+                      )
+                    })}
+
+                    {Object.keys(sectionsByLevel).length === 0 && (
+                      <Alert>
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription>
+                          <p className="text-sm">
+                            No schedule available yet. Please select your preference courses on the <strong>Elective Preferences</strong> page.
+                          </p>
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+                ) : (
+                  <TimetableView
+                    schedule={scheduleEntries.map(entry => ({
+                      course_code: entry.course_code,
+                      course_title: entry.course_title,
+                      section_label: entry.section_label,
+                      timeslot: {
+                        day: entry.day,
+                        start: entry.start_time,
+                        end: entry.end_time
+                      },
+                      room: entry.room,
+                      instructor_id: entry.instructor,
+                      student_count: 25,
+                      capacity: 30
+                    }))}
+                    title="My Weekly Schedule"
+                    studentInfo={student ? {
+                      name: student.full_name,
+                      level: student.level,
+                      studentNumber: student.student_number
+                    } : undefined}
+                  />
+                )}
 
                 {/* Course List */}
                 <Card>
@@ -246,11 +426,14 @@ export default function StudentSchedulePage() {
                   <Calendar className="h-12 w-12 mx-auto mb-4 text-gray-300" />
                   <h3 className="text-lg font-medium text-gray-900 mb-2">No Schedule Available</h3>
                   <p className="text-gray-600 mb-4">
-                    Your schedule hasn't been generated yet.
+                    {student?.is_irregular 
+                      ? "Your personalized irregular student schedule hasn't been generated yet. Please select your course preferences first."
+                      : "Your schedule hasn't been generated yet."
+                    }
                   </p>
                   <Button variant="outline" onClick={() => window.location.href = '/student/electives'}>
                     <BookOpen className="mr-2 h-4 w-4" />
-                    Select Electives
+                    {student?.is_irregular ? 'Select Course Preferences' : 'Select Electives'}
                   </Button>
                 </CardContent>
               </Card>

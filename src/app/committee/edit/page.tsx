@@ -1,7 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { MainLayout } from '@/components/layout/MainLayout'
+import { useState, useEffect, useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -12,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScheduleService, GeneratedSchedule } from '@/lib/scheduleService'
 import { CourseService } from '@/lib/courseService'
+import { supabase } from '@/lib/supabase'
 import { 
   Calendar, 
   Clock, 
@@ -42,13 +42,10 @@ interface ScheduleSection {
   instructor_id?: string
   student_count: number
   capacity: number
+  group_name?: string
 }
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
-const TIME_SLOTS = [
-  '08:00', '09:00', '10:00', '11:00', '12:00', 
-  '13:00', '14:00', '15:00', '16:00', '17:00'
-]
 
 export default function EditSchedulePage() {
   const [schedules, setSchedules] = useState<GeneratedSchedule[]>([])
@@ -63,6 +60,25 @@ export default function EditSchedulePage() {
   const [availableRooms, setAvailableRooms] = useState<string[]>([])
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  // Build dynamic time options from current sections (separate start/end lists)
+  const startTimeOptions = useMemo(() => {
+    const set = new Set<string>()
+    sections.forEach(s => { if (s?.timeslot?.start) set.add(s.timeslot.start) })
+    if (set.size === 0) {
+      ;['08:00','09:00','09:30','10:00','10:30','11:00','12:00','12:30','13:00','14:00','15:00','15:30','16:00','17:00'].forEach(t => set.add(t))
+    }
+    return Array.from(set).sort()
+  }, [sections])
+
+  const endTimeOptions = useMemo(() => {
+    const set = new Set<string>()
+    sections.forEach(s => { if (s?.timeslot?.end) set.add(s.timeslot.end) })
+    if (set.size === 0) {
+      ;['09:00','09:30','10:00','10:30','11:00','12:00','12:30','13:00','14:00','15:00','15:30','16:00','17:00','18:00'].forEach(t => set.add(t))
+    }
+    return Array.from(set).sort()
+  }, [sections])
 
   useEffect(() => {
     loadSchedules()
@@ -87,10 +103,19 @@ export default function EditSchedulePage() {
 
   const loadAvailableRooms = async () => {
     try {
+      // Prefer rooms table if available
+      const { data: roomsData } = await supabase.from('rooms').select('name')
+      if (roomsData && roomsData.length > 0) {
+        setAvailableRooms(roomsData.map((r: any) => r.name).filter(Boolean))
+        return
+      }
+
+      // Fallback: aggregate allowable_rooms from courses safely
       const courses = await CourseService.getAllCourses()
       const rooms = new Set<string>()
-      courses.forEach(course => {
-        course.allowable_rooms.forEach(room => rooms.add(room))
+      courses.forEach((course: any) => {
+        const list = Array.isArray(course.allowable_rooms) ? course.allowable_rooms : []
+        list.forEach((room: string) => rooms.add(room))
       })
       setAvailableRooms(Array.from(rooms))
     } catch (error) {
@@ -174,15 +199,50 @@ export default function EditSchedulePage() {
       setError('')
       setSuccess('')
 
-      // Update the schedule with modified sections
-      const updatedSchedule = {
-        ...selectedSchedule,
-        sections
+      // Client-side validations before saving
+      const overlapsBreak = (start: string, end: string): boolean => {
+        const breakStart = '11:00'
+        const breakEnd = '12:00'
+        return (start >= breakStart && start < breakEnd) ||
+               (end > breakStart && end <= breakEnd) ||
+               (start < breakStart && end > breakEnd)
       }
 
-      // Here you would typically save to the database
-      // For now, we'll just show success
+      // 1) 11:00-12:00 break
+      const invalidBreak = sections.find(s => overlapsBreak(s.timeslot.start, s.timeslot.end))
+      if (invalidBreak) {
+        setError(`Cannot save: ${invalidBreak.course_code} overlaps the 11:00-12:00 break`)
+        return
+      }
+
+      // 2) Room-time conflicts (same day, start, room)
+      const roomKey = (s: any) => `${s.timeslot.day}|${s.timeslot.start}|${s.room}`
+      const roomCounts = new Map<string, number>()
+      for (const s of sections) {
+        const key = roomKey(s)
+        roomCounts.set(key, (roomCounts.get(key) || 0) + 1)
+      }
+      if (Array.from(roomCounts.values()).some(c => c > 1)) {
+        setError('Cannot save: room-time conflict detected')
+        return
+      }
+
+      // 3) Duplicate courses (same course_code appears multiple times)
+      const courseCounts = new Map<string, number>()
+      for (const s of sections) {
+        courseCounts.set(s.course_code, (courseCounts.get(s.course_code) || 0) + 1)
+      }
+      if (Array.from(courseCounts.values()).some(c => c > 1)) {
+        setError('Cannot save: duplicate course entries in schedule')
+        return
+      }
+
+      // Validate and save to DB via service
+      await ScheduleService.updateScheduleSections(selectedSchedule.id, sections as any)
       setSuccess('Schedule saved successfully!')
+
+      // Reload latest schedules to reflect persisted changes
+      await loadSchedules()
     } catch (error: any) {
       setError('Failed to save schedule: ' + error.message)
     } finally {
@@ -216,10 +276,9 @@ export default function EditSchedulePage() {
     }
   }
 
-  const getSectionAtTime = (day: string, time: string) => {
-    return sections.find((section, index) => 
-      section.timeslot.day === day && 
-      section.timeslot.start === time
+  const getSectionsAtTime = (day: string, time: string) => {
+    return sections.filter(section => 
+      section.timeslot.day === day && section.timeslot.start === time
     )
   }
 
@@ -246,19 +305,16 @@ export default function EditSchedulePage() {
 
   if (loading) {
     return (
-      <MainLayout>
         <div className="p-6 flex items-center justify-center min-h-96">
           <div className="text-center">
             <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
             <p>Loading schedules...</p>
           </div>
         </div>
-      </MainLayout>
     )
   }
 
   return (
-    <MainLayout>
       <div className="p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -306,7 +362,7 @@ export default function EditSchedulePage() {
                 <SelectContent>
                   {schedules.map((schedule) => (
                     <SelectItem key={schedule.id} value={schedule.id}>
-                      Level {schedule.level} - {schedule.semester} ({schedule.sections.length} sections) - {schedule.status.toUpperCase()}
+                      Level {schedule.level} - {schedule.semester} - {schedule.status.toUpperCase()}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -319,9 +375,7 @@ export default function EditSchedulePage() {
                   <Badge variant="outline">
                     {selectedSchedule.conflicts} Conflicts
                   </Badge>
-                  <Badge variant="outline">
-                    {selectedSchedule.efficiency}% Efficiency
-                  </Badge>
+                  {/* Efficiency removed per request */}
                   <Badge 
                     variant={selectedSchedule.status === 'approved' ? 'default' : 'secondary'}
                     className={selectedSchedule.status === 'approved' ? 'bg-green-500' : ''}
@@ -389,24 +443,27 @@ export default function EditSchedulePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {TIME_SLOTS.map(time => (
+                    {[...new Set(sections.map(s => s.timeslot.start))].sort().map(time => (
                       <tr key={time}>
                         <td className="border p-2 bg-gray-50 font-medium">{time}</td>
                         {DAYS.map(day => {
-                          const section = getSectionAtTime(day, time)
+                          const atCell = getSectionsAtTime(day, time)
                           return (
                             <td key={`${day}-${time}`} className="border p-1 min-h-16">
-                              {section ? (
-                                <div 
-                                  className="bg-blue-100 border border-blue-300 rounded p-2 cursor-pointer hover:bg-blue-200 transition-colors"
-                                  onClick={() => handleEditSection(section)}
-                                >
-                                  <div className="font-medium text-sm">{section.course_code}</div>
-                                  <div className="text-xs text-gray-600">{section.section_label}</div>
-                                  <div className="text-xs text-gray-600">{section.room}</div>
-                                  <div className="text-xs text-gray-600">
-                                    {section.student_count}/{section.capacity}
-                                  </div>
+                              {atCell.length > 0 ? (
+                                <div className="space-y-2">
+                                  {atCell.map((section, idx) => (
+                                    <div 
+                                      key={section.id || `${day}-${time}-${idx}`}
+                                      className="bg-blue-100 border border-blue-300 rounded p-2 cursor-pointer hover:bg-blue-200 transition-colors"
+                                      onClick={() => handleEditSection(section)}
+                                    >
+                                      <div className="font-medium text-sm">{section.course_code} {section.group_name ? `(${section.group_name})` : ''}</div>
+                                      {/* section label removed per request */}
+                                      <div className="text-xs text-gray-600">{section.room}</div>
+                                      <div className="text-xs text-gray-600">{section.student_count}/{section.capacity}</div>
+                                    </div>
+                                  ))}
                                 </div>
                               ) : (
                                 <div className="h-16 border-2 border-dashed border-gray-200 rounded flex items-center justify-center">
@@ -444,7 +501,7 @@ export default function EditSchedulePage() {
                   <div key={section.id || `section-${index}`} className="flex items-center justify-between p-3 border rounded-lg">
                     <div className="flex items-center space-x-4">
                       <div>
-                        <div className="font-medium">{section.course_code} - {section.section_label}</div>
+                        <div className="font-medium">{section.course_code}</div>
                         <div className="text-sm text-gray-600">
                           {section.timeslot.day} {section.timeslot.start}-{section.timeslot.end} • {section.room}
                         </div>
@@ -488,6 +545,8 @@ export default function EditSchedulePage() {
               <EditSectionForm
                 section={editingSection}
                 availableRooms={availableRooms}
+                startTimeOptions={startTimeOptions}
+                endTimeOptions={endTimeOptions}
                 onSave={handleSaveSection}
                 onCancel={() => setIsEditDialogOpen(false)}
               />
@@ -541,18 +600,19 @@ export default function EditSchedulePage() {
           </DialogContent>
         </Dialog>
       </div>
-    </MainLayout>
   )
 }
 
 interface EditSectionFormProps {
   section: ScheduleSection
   availableRooms: string[]
+  startTimeOptions: string[]
+  endTimeOptions: string[]
   onSave: (section: ScheduleSection) => void
   onCancel: () => void
 }
 
-function EditSectionForm({ section, availableRooms, onSave, onCancel }: EditSectionFormProps) {
+function EditSectionForm({ section, availableRooms, startTimeOptions, endTimeOptions, onSave, onCancel }: EditSectionFormProps) {
   const [formData, setFormData] = useState({
     day: section.timeslot.day,
     start: section.timeslot.start,
@@ -616,7 +676,7 @@ function EditSectionForm({ section, availableRooms, onSave, onCancel }: EditSect
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {TIME_SLOTS.map(time => (
+              {startTimeOptions.map(time => (
                 <SelectItem key={time} value={time}>{time}</SelectItem>
               ))}
             </SelectContent>
@@ -629,7 +689,7 @@ function EditSectionForm({ section, availableRooms, onSave, onCancel }: EditSect
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {TIME_SLOTS.map(time => (
+              {endTimeOptions.map(time => (
                 <SelectItem key={time} value={time}>{time}</SelectItem>
               ))}
             </SelectContent>
