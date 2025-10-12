@@ -97,6 +97,7 @@ export function Sidebar({ className }: SidebarProps) {
       { name: 'Manage Rules', href: '/committee/rules', icon: Settings },
       { name: 'Course Management', href: '/committee/courses', icon: BookOpen },
       { name: 'Student Management', href: '/committee/students', icon: Users },
+      { name: 'Comments & Feedback', href: '/committee/comments-feedback', icon: MessageSquare },
       
       { name: 'Create Irregular Student', href: '/committee/create-irregular-student', icon: AlertCircle },
       
@@ -120,8 +121,7 @@ export function Sidebar({ className }: SidebarProps) {
       case 'faculty':
         return [
           ...baseItems,
-          { name: 'View All Schedules', href: '/faculty/schedule', icon: Calendar },
-          { name: 'Submit Feedback', href: '/faculty/feedback', icon: MessageSquare },
+          { name: 'My Schedule', href: '/faculty/schedule', icon: Calendar },
         ]
       
       case 'teaching_load_committee':

@@ -436,8 +436,19 @@ export class IrregularScheduleService {
         }
       })
 
+      // For comments, use the current level's schedule version ID (like regular students)
+      // This allows irregular students to post comments on the same schedule as regular students
+      let scheduleId = null
+      
+      if (levelSchedule && levelSchedule.id) {
+        scheduleId = levelSchedule.id
+        console.log(`✅ Using current level schedule version ID for comments: ${scheduleId}`)
+      } else {
+        console.log(`⚠️ No current level schedule found, comments won't be available`)
+      }
+
       return {
-        id: `irregular-${studentId}`,
+        id: scheduleId,
         student_id: studentId,
         semester: semester,
         sections: allSections,

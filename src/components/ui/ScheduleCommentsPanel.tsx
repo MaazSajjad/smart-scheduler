@@ -17,7 +17,8 @@ import {
   User,
   Calendar,
   Loader2,
-  Trash2
+  Trash2,
+  Clock
 } from 'lucide-react'
 import { CommentsService, ScheduleComment } from '@/lib/commentsService'
 import { useAuth } from '@/contexts/AuthContext'
@@ -25,11 +26,10 @@ import { formatDistanceToNow } from 'date-fns'
 
 interface ScheduleCommentsPanelProps {
   scheduleVersionId: string
-  sectionId?: string
 }
 
-export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: ScheduleCommentsPanelProps) {
-  const { user } = useAuth()
+export function ScheduleCommentsPanel({ scheduleVersionId }: ScheduleCommentsPanelProps) {
+  const { user, userRole } = useAuth()
   const [comments, setComments] = useState<ScheduleComment[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -38,24 +38,18 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
 
   // New comment form
   const [newCommentText, setNewCommentText] = useState('')
-  const [newCommentType, setNewCommentType] = useState<'general' | 'conflict' | 'suggestion' | 'issue'>('general')
+  const [newCommentType, setNewCommentType] = useState<'general' | 'issue'>('general')
 
   useEffect(() => {
     loadComments()
-  }, [scheduleVersionId, sectionId])
+  }, [scheduleVersionId])
 
   const loadComments = async () => {
     try {
       setLoading(true)
       setError('')
 
-      let loadedComments: ScheduleComment[]
-      if (sectionId) {
-        loadedComments = await CommentsService.getCommentsForSection(sectionId)
-      } else {
-        loadedComments = await CommentsService.getCommentsForSchedule(scheduleVersionId)
-      }
-
+      const loadedComments = await CommentsService.getCommentsForSchedule(scheduleVersionId)
       setComments(loadedComments)
     } catch (err: any) {
       setError(`Failed to load comments: ${err.message}`)
@@ -75,17 +69,28 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
       setError('')
       setSuccess('')
 
-      const newComment = await CommentsService.createComment(
-        {
-          schedule_version_id: scheduleVersionId,
-          section_id: sectionId,
-          comment_text: newCommentText.trim(),
-          comment_type: newCommentType
+      // Use API route to create comment (bypasses RLS issues)
+      const response = await fetch('/api/comments/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        user.id
-      )
+        body: JSON.stringify({
+          userId: user.id,
+          userRole: userRole || 'student',
+          scheduleVersionId: scheduleVersionId,
+          commentText: newCommentText.trim(),
+          commentType: newCommentType
+        }),
+      })
 
-      setComments([newComment, ...comments])
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to create comment')
+      }
+
+      setComments([result.comment, ...comments])
       setNewCommentText('')
       setNewCommentType('general')
       setSuccess('✅ Comment added successfully!')
@@ -112,12 +117,8 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
 
   const getCommentIcon = (type: string) => {
     switch (type) {
-      case 'conflict':
-        return <AlertTriangle className="h-4 w-4 text-red-500" />
       case 'issue':
         return <AlertCircle className="h-4 w-4 text-orange-500" />
-      case 'suggestion':
-        return <Lightbulb className="h-4 w-4 text-blue-500" />
       default:
         return <MessageSquare className="h-4 w-4 text-gray-500" />
     }
@@ -125,9 +126,7 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
 
   const getCommentTypeBadge = (type: string) => {
     const variants: Record<string, string> = {
-      conflict: 'bg-red-100 text-red-700',
       issue: 'bg-orange-100 text-orange-700',
-      suggestion: 'bg-blue-100 text-blue-700',
       general: 'bg-gray-100 text-gray-700'
     }
 
@@ -146,9 +145,7 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
           Comments & Feedback
         </CardTitle>
         <CardDescription>
-          {sectionId 
-            ? 'Comments for this specific course section' 
-            : 'View and add comments on this schedule'}
+          View and add comments on this schedule
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -187,22 +184,10 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
                       General Comment
                     </div>
                   </SelectItem>
-                  <SelectItem value="conflict">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="h-4 w-4" />
-                      Report Conflict
-                    </div>
-                  </SelectItem>
                   <SelectItem value="issue">
                     <div className="flex items-center gap-2">
                       <AlertCircle className="h-4 w-4" />
                       Report Issue
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="suggestion">
-                    <div className="flex items-center gap-2">
-                      <Lightbulb className="h-4 w-4" />
-                      Suggestion
                     </div>
                   </SelectItem>
                 </SelectContent>
@@ -243,9 +228,9 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
             <h4 className="font-semibold text-sm text-gray-700">
               {comments.length} Comment{comments.length !== 1 ? 's' : ''}
             </h4>
-            {comments.filter(c => !c.is_resolved).length > 0 && (
+            {comments.filter(c => c.status === 'pending').length > 0 && (
               <Badge variant="outline" className="bg-yellow-50 text-yellow-700">
-                {comments.filter(c => !c.is_resolved).length} Unresolved
+                {comments.filter(c => c.status === 'pending').length} Pending
               </Badge>
             )}
           </div>
@@ -264,7 +249,7 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
           ) : (
             <div className="space-y-3">
               {comments.map((comment) => (
-                <Card key={comment.id} className={comment.is_resolved ? 'bg-gray-50' : 'bg-white'}>
+                <Card key={comment.id} className={comment.status === 'reviewed' ? 'bg-gray-50' : 'bg-white'}>
                   <CardContent className="p-4">
                     <div className="space-y-3">
                       {/* Comment Header */}
@@ -274,25 +259,46 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="font-semibold text-sm">
-                                {comment.student?.full_name || 'Anonymous'}
+                                {comment.student_id 
+                                  ? (comment.student?.user?.full_name || 
+                                     comment.student?.full_name || 
+                                     comment.student?.user?.email || 
+                                     comment.student?.student_number || 
+                                     'Student')
+                                  : (comment.faculty?.user?.full_name || 
+                                     comment.faculty?.full_name || 
+                                     comment.faculty?.user?.email || 
+                                     comment.faculty?.faculty_number || 
+                                     'Faculty')}
                               </span>
                               {getCommentTypeBadge(comment.comment_type)}
                             </div>
                             <div className="flex items-center gap-2 text-xs text-gray-500">
                               <Calendar className="h-3 w-3" />
                               {formatDistanceToNow(new Date(comment.created_at), { addSuffix: true })}
+                              {comment.student_id && (comment.student?.student_number || comment.student?.user?.email) && (
+                                <span className="text-gray-400">
+                                  • {comment.student?.student_number ? `#${comment.student.student_number}` : comment.student?.user?.email}
+                                </span>
+                              )}
+                              {comment.faculty_id && (comment.faculty?.faculty_number || comment.faculty?.user?.email) && (
+                                <span className="text-gray-400">
+                                  • {comment.faculty?.faculty_number ? `#${comment.faculty.faculty_number}` : comment.faculty?.user?.email}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2">
-                          {comment.is_resolved && (
+                          {comment.status === 'reviewed' && (
                             <Badge className="bg-green-100 text-green-700">
                               <CheckCircle className="h-3 w-3 mr-1" />
-                              Resolved
+                              Reviewed
                             </Badge>
                           )}
-                          {comment.user_id === user?.id && (
+                          {((comment.student_id && comment.student?.user?.email === user?.email) || 
+                            (comment.faculty_id && comment.faculty?.user?.email === user?.email)) && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -310,10 +316,16 @@ export function ScheduleCommentsPanel({ scheduleVersionId, sectionId }: Schedule
                         {comment.comment_text}
                       </p>
 
-                      {/* Resolved Info */}
-                      {comment.is_resolved && comment.resolved_at && (
-                        <div className="text-xs text-gray-500 pt-2 border-t">
-                          Resolved {formatDistanceToNow(new Date(comment.resolved_at), { addSuffix: true })}
+                      {/* Admin Reply */}
+                      {comment.admin_reply && (
+                        <div className="bg-blue-50 border border-blue-200 rounded p-3 mt-3">
+                          <p className="text-sm font-semibold text-blue-900 mb-1">Admin Reply:</p>
+                          <p className="text-sm text-blue-800 whitespace-pre-wrap">
+                            {comment.admin_reply}
+                          </p>
+                          <p className="text-xs text-blue-600 mt-2">
+                            Replied {formatDistanceToNow(new Date(comment.updated_at), { addSuffix: true })}
+                          </p>
                         </div>
                       )}
                     </div>

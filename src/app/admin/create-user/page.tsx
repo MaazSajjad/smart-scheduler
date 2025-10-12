@@ -25,7 +25,10 @@ export default function CreateUserPage() {
     role: 'student',
     student_number: '',
     level: 1,
-    contact: ''
+    contact: '',
+    faculty_number: '',
+    full_name: '',
+    department: ''
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -60,7 +63,10 @@ export default function CreateUserPage() {
           role: formData.role,
           student_number: formData.student_number,
           level: formData.level,
-          contact: formData.contact
+          contact: formData.contact,
+          faculty_number: formData.faculty_number,
+          full_name: formData.full_name,
+          department: formData.department
         }),
       })
 
@@ -81,7 +87,10 @@ export default function CreateUserPage() {
         role: 'student',
         student_number: '',
         level: 1,
-        contact: ''
+        contact: '',
+        faculty_number: '',
+        full_name: '',
+        department: ''
       })
     } catch (error: any) {
       setError('Failed to create user: ' + error.message)
@@ -206,6 +215,55 @@ export default function CreateUserPage() {
                         </SelectContent>
                       </Select>
                     </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="contact">Contact Information</Label>
+                    <Input
+                      id="contact"
+                      value={formData.contact}
+                      onChange={(e) => setFormData({ ...formData, contact: e.target.value })}
+                      placeholder="Phone number or additional contact info"
+                    />
+                  </div>
+                </>
+              )}
+
+              {formData.role === 'faculty' && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="faculty_number">Faculty Number *</Label>
+                      <Input
+                        id="faculty_number"
+                        value={formData.faculty_number}
+                        onChange={(e) => setFormData({ ...formData, faculty_number: e.target.value })}
+                        placeholder="FAC001"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="department">Department *</Label>
+                      <Input
+                        id="department"
+                        value={formData.department}
+                        onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                        placeholder="Computer Science"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="full_name">Full Name *</Label>
+                    <Input
+                      id="full_name"
+                      value={formData.full_name}
+                      onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+                      placeholder="Dr. John Smith"
+                      required
+                    />
                   </div>
 
                   <div>

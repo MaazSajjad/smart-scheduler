@@ -33,6 +33,7 @@ export default function StudentSchedulePage() {
   const [conflicts, setConflicts] = useState<string[]>([])
   const [error, setError] = useState('')
   const [scheduleVersionId, setScheduleVersionId] = useState<string | null>(null)
+  const [irregularScheduleId, setIrregularScheduleId] = useState<string | null>(null)
   const [currentLevelSections, setCurrentLevelSections] = useState<any[]>([])
   const [preferenceSections, setPreferenceSections] = useState<any[]>([])
   const [sectionsByLevel, setSectionsByLevel] = useState<{ [level: number]: any[] }>({})
@@ -136,7 +137,8 @@ export default function StudentSchedulePage() {
         setScheduleEntries(result.sections || [])
         setTotalCredits(result.total_credits || 0)
         setTotalCourses(result.total_courses || 0)
-        setScheduleVersionId(result.id)
+        setScheduleVersionId(result.id) // Use the schedule version ID for comments
+        setIrregularScheduleId(null) // Don't use irregular schedule ID
       } else {
         // No schedule available
         setSectionsByLevel({})
@@ -146,6 +148,7 @@ export default function StudentSchedulePage() {
         setTotalCredits(0)
         setTotalCourses(0)
         setScheduleVersionId(null)
+        setIrregularScheduleId(null)
       }
     } catch (error: any) {
       console.error('Error loading irregular schedule:', error)

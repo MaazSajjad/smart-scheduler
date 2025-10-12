@@ -406,13 +406,25 @@ export class FacultyService {
     comment: string,
     requestedChanges?: string
   ): Promise<boolean> {
+    // Get faculty user_id from faculty_id
+    const { data: faculty, error: facultyError } = await supabase
+      .from('faculty')
+      .select('user_id')
+      .eq('id', facultyId)
+      .single()
+
+    if (facultyError || !faculty) {
+      console.error('Error finding faculty user:', facultyError)
+      return false
+    }
+
     const { error } = await supabase
       .from('schedule_comments')
       .insert({
         schedule_version_id: scheduleVersionId,
-        user_id: facultyId,
+        faculty_id: facultyId,
         comment_text: comment,
-        requested_changes: requestedChanges,
+        comment_type: 'general',
         status: 'pending'
       })
 

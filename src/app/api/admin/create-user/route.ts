@@ -14,7 +14,7 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
 
 export async function POST(request: Request) {
   try {
-    const { email, password, role, student_number, level, contact } = await request.json()
+    const { email, password, role, student_number, level, contact, faculty_number, full_name, department } = await request.json()
 
     // Create auth user using admin client
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
@@ -36,6 +36,7 @@ export async function POST(request: Request) {
             .upsert({
               id: existingUser.id,
               email: email,
+              full_name: full_name || null,
               role: role,
             })
 
@@ -53,6 +54,21 @@ export async function POST(request: Request) {
               })
 
             if (studentError) throw studentError
+          }
+
+          // Create faculty record if role is faculty
+          if (role === 'faculty') {
+            const { error: facultyError } = await supabaseAdmin
+              .from('faculty')
+              .upsert({
+                user_id: existingUser.id,
+                faculty_number: faculty_number || email.split('@')[0], // Use email prefix as faculty number if not provided
+                full_name: full_name || email.split('@')[0], // Use email prefix as name if not provided
+                department: department || 'General',
+                contact: contact || ''
+              })
+
+            if (facultyError) throw facultyError
           }
 
           return NextResponse.json({ 
@@ -78,6 +94,7 @@ export async function POST(request: Request) {
       .insert({
         id: authData.user.id,
         email: email,
+        full_name: full_name || null,
         role: role,
       })
 
@@ -95,6 +112,21 @@ export async function POST(request: Request) {
         })
 
       if (studentError) throw studentError
+    }
+
+    // Create faculty record if role is faculty
+    if (role === 'faculty') {
+      const { error: facultyError } = await supabaseAdmin
+        .from('faculty')
+        .insert({
+          user_id: authData.user.id,
+          faculty_number: faculty_number || email.split('@')[0], // Use email prefix as faculty number if not provided
+          full_name: full_name || email.split('@')[0], // Use email prefix as name if not provided
+          department: department || 'General',
+          contact: contact || ''
+        })
+
+      if (facultyError) throw facultyError
     }
 
     return NextResponse.json({ 

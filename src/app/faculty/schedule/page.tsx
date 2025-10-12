@@ -9,7 +9,10 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ScheduleService, GeneratedSchedule } from '@/lib/scheduleService'
+import { SystemSettingsService } from '@/lib/systemSettingsService'
+import { supabase } from '@/lib/supabase'
 import { TimetableView } from '@/components/ui/TimetableView'
+import { ScheduleCommentsPanel } from '@/components/ui/ScheduleCommentsPanel'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Calendar,
@@ -20,7 +23,8 @@ import {
   Printer,
   AlertCircle,
   BookOpen,
-  TrendingUp
+  TrendingUp,
+  MessageSquare
 } from 'lucide-react'
 
 export default function FacultySchedulePage() {
@@ -32,6 +36,7 @@ export default function FacultySchedulePage() {
   const [error, setError] = useState('')
   const [globalSchedules, setGlobalSchedules] = useState<GeneratedSchedule[]>([])
   const [selectedLevel, setSelectedLevel] = useState<string>('all')
+  const [scheduleVersionId, setScheduleVersionId] = useState<string | null>(null)
 
   useEffect(() => {
     if (user?.id) {
@@ -53,6 +58,51 @@ export default function FacultySchedulePage() {
         await FacultyService.linkFacultyToUser(user.id, user.email || '')
         facultyData = await FacultyService.getFacultyByUserId(user.id)
       }
+      
+      // Sync faculty record to ensure it has correct information
+      if (facultyData) {
+        try {
+          // If faculty name is generic, update it with proper name from form
+          if (facultyData.full_name === 'Faculty Member' || facultyData.full_name === facultyData.faculty_number) {
+            // Try to get proper name from email or use a better default
+            const properName = user.email?.split('@')[0].replace(/\./g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Faculty Member'
+            await fetch('/api/faculty/update-name', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: user.id, fullName: properName })
+            })
+            console.log('✅ Faculty name updated to:', properName)
+          }
+          
+          await fetch('/api/faculty/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.id })
+          })
+          console.log('✅ Faculty record synced')
+          // Reload faculty data to get updated info
+          facultyData = await FacultyService.getFacultyByUserId(user.id)
+        } catch (syncError) {
+          console.log('⚠️ Could not sync faculty record:', syncError)
+        }
+      }
+      // Get current schedule version ID for comments (always load this)
+      const currentSemester = await SystemSettingsService.getCurrentSemester()
+      const { data: scheduleVersion, error: scheduleError } = await supabase
+        .from('schedule_versions')
+        .select('id, level, semester, created_at')
+        .eq('semester', currentSemester)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (scheduleVersion && !scheduleError) {
+        setScheduleVersionId(scheduleVersion.id)
+        console.log('✅ Faculty schedule version loaded:', scheduleVersion.id)
+      } else {
+        console.log('⚠️ No schedule version found for faculty comments:', scheduleError?.message)
+      }
+
       if (!facultyData) {
         // No linked faculty: fall back to global schedules (read-only)
         setFaculty(null)
@@ -256,38 +306,83 @@ export default function FacultySchedulePage() {
           </div>
         )}
 
-        {/* Timetable (faculty-linked users) */}
-        {faculty && (loading ? (
-          <Card>
-            <CardContent className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-              <span className="ml-2">Loading schedule...</span>
-            </CardContent>
-          </Card>
-        ) : assignments.length > 0 ? (
-          <TimetableView
-            schedule={assignments.map(a => ({
-              course_code: a.course_code,
-              section_label: a.group_name || 'A',
-              timeslot: { day: a.day, start: a.start_time, end: a.end_time },
-              room: a.room,
-              instructor_id: faculty?.full_name,
-              student_count: a.student_count,
-              capacity: undefined
-            }))}
-            title={faculty ? `${faculty.full_name}'s Timetable` : 'My Timetable'}
-          />
-        ) : (
-          <Card>
-            <CardContent className="text-center py-12">
-              <Calendar className="h-16 w-16 mx-auto mb-4 text-gray-300" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No Schedule Available</h3>
-              <p className="text-gray-600">
-                Your teaching schedule hasn't been generated yet, or you have no courses assigned this semester.
-              </p>
-            </CardContent>
-          </Card>
-        ))}
+        {/* Schedule and Comments Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Timetable (2/3 width) */}
+          <div className="lg:col-span-2">
+            {faculty && (loading ? (
+              <Card>
+                <CardContent className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                  <span className="ml-2">Loading schedule...</span>
+                </CardContent>
+              </Card>
+            ) : assignments.length > 0 ? (
+              <TimetableView
+                schedule={assignments.map(a => ({
+                  course_code: a.course_code,
+                  section_label: a.group_name || 'A',
+                  timeslot: { day: a.day, start: a.start_time, end: a.end_time },
+                  room: a.room,
+                  instructor_id: faculty?.full_name,
+                  student_count: a.student_count,
+                  capacity: undefined
+                }))}
+                title={faculty ? `${faculty.full_name}'s Timetable` : 'My Timetable'}
+              />
+            ) : (
+              <Card>
+                <CardContent className="text-center py-12">
+                  <Calendar className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No Schedule Available</h3>
+                  <p className="text-gray-600">
+                    Your teaching schedule hasn't been generated yet, or you have no courses assigned this semester.
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* Comments Panel (1/3 width) */}
+          <div className="lg:col-span-1">
+            {user ? (
+              scheduleVersionId ? (
+                <ScheduleCommentsPanel
+                  scheduleVersionId={scheduleVersionId}
+                />
+              ) : (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <MessageSquare className="h-5 w-5 text-blue-600" />
+                      Comments & Feedback
+                    </CardTitle>
+                    <CardDescription>
+                      Share your thoughts on the current schedule
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="text-center py-8">
+                    <MessageSquare className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Schedule Available</h3>
+                    <p className="text-gray-600 text-sm">
+                      Comments will be available once the schedule is generated.
+                    </p>
+                  </CardContent>
+                </Card>
+              )
+            ) : (
+              <Card>
+                <CardContent className="text-center py-8">
+                  <MessageSquare className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Comments & Feedback</h3>
+                  <p className="text-gray-600 text-sm">
+                    Please log in to view and submit comments.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
 
         {/* Course Summary */}
         {faculty && assignments.length > 0 && (
