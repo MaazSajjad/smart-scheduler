@@ -119,12 +119,12 @@ export async function POST(request: NextRequest) {
       studentsPerCourse[c.code] = perCourse
     })
 
-    // Enforce a universal 11:00-12:00 break (Mon-Thu) regardless of incoming constraints
+    // Enforce a universal 12:00-13:00 break (Mon-Thu) regardless of incoming constraints
     const enforcedBreak = [
-      { day: 'Monday', start: '11:00', end: '12:00' },
-      { day: 'Tuesday', start: '11:00', end: '12:00' },
-      { day: 'Wednesday', start: '11:00', end: '12:00' },
-      { day: 'Thursday', start: '11:00', end: '12:00' }
+      { day: 'Monday', start: '12:00', end: '13:00' },
+      { day: 'Tuesday', start: '12:00', end: '13:00' },
+      { day: 'Wednesday', start: '12:00', end: '13:00' },
+      { day: 'Thursday', start: '12:00', end: '13:00' }
     ]
 
     const mergedBlockedSlots = enforcedBreak
@@ -140,15 +140,15 @@ export async function POST(request: NextRequest) {
 You are an academic timetable optimizer. Generate a schedule for level ${level} students.
 
 ⚠️ CRITICAL BREAK TIME REQUIREMENT ⚠️
-MANDATORY BREAK: 11:00 AM - 12:00 PM (1 hour) on Monday, Tuesday, Wednesday, and Thursday
-- The entire 11:00-12:00 time block must be COMPLETELY FREE
-- Classes MUST END BEFORE 11:00 AM (e.g., end at 10:30 AM or 10:00 AM)
-- OR classes MUST START AT OR AFTER 12:00 PM (e.g., start at 12:00 PM or 12:30 PM)
-- NO class can have an end time of 11:00 AM or later if it started before 11:00 AM
-- NO class can have a start time before 12:00 PM if it ends after 11:00 AM
+MANDATORY BREAK: 12:00 PM - 1:00 PM (1 hour) on Monday, Tuesday, Wednesday, and Thursday
+- The entire 12:00-13:00 time block must be COMPLETELY FREE
+- Classes MUST END BEFORE 12:00 PM (e.g., end at 11:30 AM or 11:00 AM)
+- OR classes MUST START AT OR AFTER 1:00 PM (e.g., start at 1:00 PM or 1:30 PM)
+- NO class can have an end time of 12:00 PM or later if it started before 12:00 PM
+- NO class can have a start time before 1:00 PM if it ends after 12:00 PM
 - This break time is SACRED and MUST NOT be violated under any circumstances
-- Example VALID schedules: 9:00-10:30, 10:00-11:00 is INVALID (ends AT 11:00), 12:00-13:30, 12:30-14:00
-- Example INVALID schedules: 9:30-11:00 (touches break), 10:00-11:30 (crosses break), 11:00-12:00 (IS the break), 11:30-13:00 (starts during break)
+- Example VALID schedules: 9:00-11:30, 10:00-12:00 is INVALID (ends AT 12:00), 1:00-2:30, 1:30-3:00
+- Example INVALID schedules: 9:30-12:00 (touches break), 10:00-12:30 (crosses break), 12:00-13:00 (IS the break), 12:30-14:00 (starts during break)
 
 SYSTEM CONSTRAINTS:
 - Allowed days: ${availableDays.join(', ')}
@@ -179,12 +179,14 @@ Generate sections for FLEXIBLE (elective) courses only — compulsory courses ar
 
 SCHEDULING VALIDATION CHECKLIST:
 Before including any timeslot in your response, verify:
-✓ Does this timeslot avoid 11:00-12:00 break period?
+✓ Does this timeslot avoid 12:00-13:00 break period?
 ✓ Does it fall within allowed days (${availableDays.join(', ')})?
 ✓ Does it fall within allowed hours (${startTime}-${endTime})?
 ✓ Does it avoid all blocked slots?
 
 Return a JSON array of sections with fields: course_code, section_label, timeslot (day, start, end), room, allocated_student_ids, justification, confidence_score.
+
+CRITICAL: Return ONLY a valid JSON array. Do not include any markdown formatting, explanations, or additional text. Just the JSON array.
 
 IMPORTANT: The timeslot.start and timeslot.end must be in HH:MM format (24-hour).
 
@@ -200,7 +202,7 @@ Example response format:
     },
     "room": "A101",
     "allocated_student_ids": ["student1", "student2", "student3"],
-    "justification": "Ends at 10:00 AM, before mandatory break period (11:00-12:00)",
+    "justification": "Ends at 11:30 AM, before mandatory break period (12:00-13:00)",
     "confidence_score": 0.95
   },
   {
@@ -213,7 +215,7 @@ Example response format:
     },
     "room": "A102",
     "allocated_student_ids": ["student4", "student5", "student6"],
-    "justification": "Starts at 12:00 PM, after mandatory break period (11:00-12:00)",
+    "justification": "Starts at 1:00 PM, after mandatory break period (12:00-13:00)",
     "confidence_score": 0.95
   }
 ]
@@ -232,7 +234,7 @@ Example response format:
       messages: [
         {
           role: "system",
-          content: "You are a helpful academic scheduling assistant. CRITICAL RULE: The 11:00-12:00 time block on Monday-Thursday must be COMPLETELY FREE. Classes must end BEFORE 11:00 AM (not AT 11:00) or start AT/AFTER 12:00 PM. Always return valid JSON."
+          content: "You are a helpful academic scheduling assistant. CRITICAL RULE: The 12:00-13:00 time block on Monday-Thursday must be COMPLETELY FREE. Classes must end BEFORE 12:00 PM (not AT 12:00) or start AT/AFTER 1:00 PM. Always return valid JSON."
         },
         {
           role: "user",
@@ -277,11 +279,11 @@ Example response format:
         
         const startMin = toMinutes(start)
         const endMin = toMinutes(end)
-        const breakStart = 11 * 60 // 11:00
-        const breakEnd = 12 * 60   // 12:00
+        const breakStart = 12 * 60 // 12:00
+        const breakEnd = 13 * 60   // 13:00
         
-        // Check if class overlaps with break (11:00-12:00)
-        // Class must either end BEFORE 11:00 or start AT OR AFTER 12:00
+        // Check if class overlaps with break (12:00-13:00)
+        // Class must either end BEFORE 12:00 or start AT OR AFTER 13:00
         const overlapsBreak = !(endMin < breakStart || startMin >= breakEnd)
         
         if (overlapsBreak) {

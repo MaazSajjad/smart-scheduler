@@ -228,17 +228,17 @@ export class GenerateAllSchedulesService {
           activeRules
         )
         
-        // Enforce 11:00-12:00 break by filtering out overlapping sections
+        // Enforce 12:00-13:00 break by filtering out overlapping sections
         const overlapsBreak = (start: string, end: string): boolean => {
-          const breakStart = '11:00'
-          const breakEnd = '12:00'
+          const breakStart = '12:00'
+          const breakEnd = '13:00'
           return (start >= breakStart && start < breakEnd) ||
                  (end > breakStart && end <= breakEnd) ||
                  (start < breakStart && end > breakEnd)
         }
         const filteredSchedule = groupSchedule.filter((s: any) => !overlapsBreak(s.start_time, s.end_time))
         if (filteredSchedule.length !== groupSchedule.length) {
-          console.warn(`⏱️ Removed ${groupSchedule.length - filteredSchedule.length} section(s) in ${groupName} overlapping 11:00-12:00`)
+          console.warn(`⏱️ Removed ${groupSchedule.length - filteredSchedule.length} section(s) in ${groupName} overlapping 12:00-13:00`)
         }
         group.sections = filteredSchedule
         console.log(`✅ ${groupName}: Assigned ${groupSchedule.length} sections`)
@@ -395,10 +395,10 @@ export class GenerateAllSchedulesService {
       students_per_course: {},
       blocked_slots: [
         { day: 'Friday', start: '08:00', end: '18:00' }, // No classes on Friday
-        { day: 'Monday', start: '11:00', end: '12:00' }, // Break time
-        { day: 'Tuesday', start: '11:00', end: '12:00' },
-        { day: 'Wednesday', start: '11:00', end: '12:00' },
-        { day: 'Thursday', start: '11:00', end: '12:00' },
+        { day: 'Monday', start: '12:00', end: '13:00' }, // Break time
+        { day: 'Tuesday', start: '12:00', end: '13:00' },
+        { day: 'Wednesday', start: '12:00', end: '13:00' },
+        { day: 'Thursday', start: '12:00', end: '13:00' },
         ...blockedSlotsFromOtherLevels // Add occupied slots from other levels
       ],
       available_rooms: allRooms,
@@ -407,7 +407,7 @@ export class GenerateAllSchedulesService {
         '🔒 CRITICAL: NEVER use time/room slots that are OCCUPIED by other levels',
         `🔒 OCCUPIED SLOTS (MUST AVOID): ${occupiedSlots.map(s => `${s.room} on ${s.day} at ${s.start} (Level ${s.level})`).join(', ') || 'None yet'}`,
         'No classes on Friday',
-        'No classes during 11:00-12:00 break time',
+        'No classes during 12:00-13:00 break time',
         'Each section should have 20-30 students maximum',
         'No duplicate courses in the same group schedule',
         'Lab courses must use LAB rooms (LAB1-LAB6)',

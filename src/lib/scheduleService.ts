@@ -144,16 +144,16 @@ export class ScheduleService {
         }
       })
 
-      // Helper: check if a timeslot overlaps with the enforced 11:00-12:00 break
+      // Helper: check if a timeslot overlaps with the enforced 12:00-13:00 break
       const overlapsBreak = (start: string, end: string): boolean => {
-        const breakStart = '11:00'
-        const breakEnd = '12:00'
-        return (start >= breakStart && start < breakEnd) ||
+        const breakStart = '12:00'
+        const breakEnd = '13:00'
+        return (start >= breakStart && start < breakEnd) || 
                (end > breakStart && end <= breakEnd) ||
                (start < breakStart && end > breakEnd)
       }
 
-      // Create sections for flexible courses from AI recommendations, filtering out 11:00-12:00 overlaps
+      // Create sections for flexible courses from AI recommendations, filtering out 12:00-13:00 overlaps
       const flexibleSections: ScheduleSection[] = recommendations
         .filter((rec: any) => !overlapsBreak(rec.timeslot?.start, rec.timeslot?.end))
         .map((rec, index) => ({
@@ -356,22 +356,22 @@ export class ScheduleService {
 
   /**
    * Update schedule sections with validation and save to DB.
-   * Prevents 11:00-12:00 overlap, room-time conflicts, and duplicate course entries.
+   * Prevents 12:00-13:00 overlap, room-time conflicts, and duplicate course entries.
    */
   static async updateScheduleSections(scheduleId: string, sections: ScheduleSection[]): Promise<void> {
     // Basic validations
     const overlapsBreak = (start: string, end: string): boolean => {
-      const breakStart = '11:00'
-      const breakEnd = '12:00'
+      const breakStart = '12:00'
+      const breakEnd = '13:00'
       return (start >= breakStart && start < breakEnd) ||
              (end > breakStart && end <= breakEnd) ||
              (start < breakStart && end > breakEnd)
     }
 
-    // 1) 11:00-12:00 validation
+    // 1) 12:00-13:00 validation
     const invalidBreak = sections.find(s => overlapsBreak(s.timeslot.start, s.timeslot.end))
     if (invalidBreak) {
-      throw new Error(`Section ${invalidBreak.course_code} overlaps 11:00-12:00 break`)
+      throw new Error(`Section ${invalidBreak.course_code} overlaps 12:00-1:00 PM break`)
     }
 
     // 2) Room-time conflicts within this schedule

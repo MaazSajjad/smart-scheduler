@@ -201,17 +201,17 @@ export default function EditSchedulePage() {
 
       // Client-side validations before saving
       const overlapsBreak = (start: string, end: string): boolean => {
-        const breakStart = '11:00'
-        const breakEnd = '12:00'
+        const breakStart = '12:00'
+        const breakEnd = '13:00'
         return (start >= breakStart && start < breakEnd) ||
                (end > breakStart && end <= breakEnd) ||
                (start < breakStart && end > breakEnd)
       }
 
-      // 1) 11:00-12:00 break
+      // 1) 12:00-13:00 break
       const invalidBreak = sections.find(s => overlapsBreak(s.timeslot.start, s.timeslot.end))
       if (invalidBreak) {
-        setError(`Cannot save: ${invalidBreak.course_code} overlaps the 11:00-12:00 break`)
+        setError(`Cannot save: ${invalidBreak.course_code} overlaps the 12:00-13:00 break`)
         return
       }
 

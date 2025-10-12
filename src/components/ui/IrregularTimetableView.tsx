@@ -38,8 +38,9 @@ interface IrregularTimetableViewProps {
   title?: string
 }
 
-const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const TIME_SLOTS = [
+  '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
   '12:00', '12:30', '13:00', '13:30', '14:00', '14:30', 
   '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00'
 ]
@@ -187,13 +188,13 @@ export function IrregularTimetableView({
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            <table className="w-full border-collapse text-xs">
               <thead>
                 <tr>
-                  <th className="border border-gray-300 p-2 bg-gray-50 font-semibold text-left">Time</th>
+                  <th className="border border-gray-300 p-1 bg-gray-50 font-semibold text-left text-xs">Time</th>
                   {DAYS.map(day => (
-                    <th key={day} className="border border-gray-300 p-2 bg-gray-50 font-semibold text-center min-w-[150px]">
-                      {day}
+                    <th key={day} className="border border-gray-300 p-1 bg-gray-50 font-semibold text-center text-xs min-w-[80px]">
+                      {day.slice(0, 3)}
                     </th>
                   ))}
                 </tr>
@@ -201,13 +202,13 @@ export function IrregularTimetableView({
               <tbody>
                 {TIME_SLOTS.map(time => (
                   <tr key={time}>
-                    <td className="border border-gray-300 p-2 bg-gray-50 font-medium text-sm">
+                    <td className="border border-gray-300 p-1 bg-gray-50 font-medium text-xs">
                       {time}
                     </td>
                     {DAYS.map(day => {
                       const courses = scheduleByDay[day][time] || []
                       return (
-                        <td key={day} className="border border-gray-300 p-1 min-h-[60px]">
+                        <td key={day} className="border border-gray-300 p-0.5 min-h-[60px]">
                           {courses.map((course, index) => (
                             <div
                               key={index}
@@ -215,12 +216,12 @@ export function IrregularTimetableView({
                             >
                               <div className="flex items-center gap-1 mb-1">
                                 {getSourceIcon(course.source)}
-                                <span className="font-semibold">{course.course_code}</span>
+                                <span className="font-semibold text-xs">{course.course_code}</span>
                               </div>
                               <div className="text-xs opacity-75">
                                 <div className="flex items-center gap-1">
                                   <MapPin className="h-2 w-2" />
-                                  {course.room}
+                                  R{course.room}
                                 </div>
                                 <div className="flex items-center gap-1">
                                   <User className="h-2 w-2" />

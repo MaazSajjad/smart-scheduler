@@ -143,6 +143,15 @@ export default function ElectivePreferencesPage() {
       }
 
       console.log('✅ Loaded failed courses:', requirements)
+      console.log('📊 Failed courses count:', requirements?.length || 0)
+      if (requirements && requirements.length > 0) {
+        console.log('📋 Failed course details:', requirements.map(r => ({
+          course_code: r.course?.code,
+          course_title: r.course?.title,
+          original_level: r.original_level,
+          reason: r.reason
+        })))
+      }
       setFailedCourses(requirements || [])
       
       // Load electives based on failed courses
@@ -176,7 +185,14 @@ export default function ElectivePreferencesPage() {
           reason: req.reason
         }))
       
-      console.log('Failed course electives:', failedCourseElectives)
+      console.log('📚 Failed course electives count:', failedCourseElectives.length)
+      console.log('📚 Failed course electives:', failedCourseElectives.map(fc => ({
+        code: fc.code,
+        title: fc.title,
+        level: fc.level,
+        original_level: fc.original_level,
+        reason: fc.reason
+      })))
       
       // Combine current level electives with failed course electives
       const allElectives = [...currentLevelElectives, ...failedCourseElectives]
@@ -186,7 +202,14 @@ export default function ElectivePreferencesPage() {
         index === self.findIndex(c => c.id === course.id)
       )
       
-      console.log('Final electives for irregular student:', uniqueElectives)
+      console.log('🎯 Final electives for irregular student count:', uniqueElectives.length)
+      console.log('🎯 Final electives for irregular student:', uniqueElectives.map(c => ({
+        code: c.code,
+        title: c.title,
+        level: c.level,
+        is_failed_course: c.is_failed_course,
+        original_level: c.original_level
+      })))
       setCourses(uniqueElectives)
     } catch (error) {
       console.error('Error loading electives for irregular student:', error)
@@ -266,6 +289,10 @@ export default function ElectivePreferencesPage() {
           console.log('✅ Found student:', student)
           console.log('🔍 Looking for preferences for student_id:', student.id)
           
+          // Get current semester
+          const { SystemSettingsService } = await import('@/lib/systemSettingsService')
+          const currentSemester = await SystemSettingsService.getCurrentSemester()
+
           const { data: preferences, error: preferencesError } = await supabase
             .from('elective_choices')
             .select(`
@@ -273,7 +300,7 @@ export default function ElectivePreferencesPage() {
               courses(*)
             `)
             .eq('student_id', student.id)
-            .eq('semester', 'Fall 2025')
+            .eq('semester', currentSemester)
             .order('priority')
 
           if (preferencesError) {
@@ -287,7 +314,7 @@ export default function ElectivePreferencesPage() {
               course: p.courses
             })))
           } else {
-            console.log('ℹ️ No preferences found for student_id:', student.id, 'semester: Fall 2025')
+            console.log('ℹ️ No preferences found for student_id:', student.id, 'semester:', currentSemester)
             
             // Let's also check if there are ANY preferences for this student (any semester)
             const { data: allPreferences } = await supabase
@@ -401,19 +428,23 @@ export default function ElectivePreferencesPage() {
         throw new Error('Student record not found')
       }
 
+      // Get current semester
+      const { SystemSettingsService } = await import('@/lib/systemSettingsService')
+      const currentSemester = await SystemSettingsService.getCurrentSemester()
+
       // Delete existing preferences for this semester
       await supabase
         .from('elective_choices')
         .delete()
         .eq('student_id', student.id)
-        .eq('semester', 'Fall 2025')
+        .eq('semester', currentSemester)
 
       // Insert new preferences
       const preferences = selectedElectives.map(e => ({
         student_id: student.id,
         course_id: e.course_id,
         priority: e.priority,
-        semester: 'Fall 2025' // Add required semester field
+        semester: currentSemester // Use current semester
       }))
 
       console.log('💾 Saving preferences:', preferences)

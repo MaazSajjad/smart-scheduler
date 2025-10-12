@@ -319,12 +319,12 @@ export class SchedulingRulesService {
         }
 
         // Check for break time violations
-        if (ruleText.includes('break time') || ruleText.includes('11:00')) {
+        if (ruleText.includes('break time') || ruleText.includes('12:00')) {
           const hasBreakTimeViolation = this.checkForBreakTimeViolations(scheduleData)
           if (hasBreakTimeViolation) {
             violations.push({
               rule,
-              violation: 'Schedule contains classes during break time (11:00-12:00)',
+              violation: 'Schedule contains classes during break time (12:00-1:00 PM)',
               severity: rule.priority >= 8 ? 'critical' : 'high'
             })
           }
@@ -355,7 +355,7 @@ export class SchedulingRulesService {
   }
 
   /**
-   * Check if schedule has break time violations (11:00-12:00)
+   * Check if schedule has break time violations (12:00-13:00)
    */
   private static checkForBreakTimeViolations(scheduleData: any): boolean {
     const groups = scheduleData.groups || {}
@@ -364,10 +364,10 @@ export class SchedulingRulesService {
       if (sections.some((s: any) => {
         const start = s.start_time
         const end = s.end_time
-        // Check if class overlaps with 11:00-12:00
-        return (start >= '11:00' && start < '12:00') || 
-               (end > '11:00' && end <= '12:00') ||
-               (start < '11:00' && end > '12:00')
+        // Check if class overlaps with 12:00-13:00
+        return (start >= '12:00' && start < '13:00') || 
+               (end > '12:00' && end <= '13:00') ||
+               (start < '12:00' && end > '13:00')
       })) {
         return true
       }

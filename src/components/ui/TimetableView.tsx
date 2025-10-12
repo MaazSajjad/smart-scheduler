@@ -56,7 +56,7 @@ function getTimeSlots12Hour(schedule: TimetableEntry[]): string[] {
   return slots24.map(formatTime12Hour)
 }
 
-const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 export function TimetableView({ schedule, title = "Class Timetable", studentInfo }: TimetableViewProps) {
   const timeSlots = getTimeSlots12Hour(schedule)
@@ -83,16 +83,16 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
       </CardHeader>
       <CardContent className="p-6">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse border border-gray-300">
+          <table className="w-full border-collapse border border-gray-300 text-xs">
             {/* Header Row */}
             <thead>
               <tr className="bg-blue-600 text-white">
-                <th className="border border-gray-300 px-4 py-3 text-center font-bold text-sm">
+                <th className="border border-gray-300 px-2 py-2 text-center font-bold text-xs">
                   Time
                 </th>
                 {DAYS.map(day => (
-                  <th key={day} className="border border-gray-300 px-4 py-3 text-center font-bold text-sm min-w-[120px]">
-                    {day}
+                  <th key={day} className="border border-gray-300 px-1 py-2 text-center font-bold text-xs min-w-[80px]">
+                    {day.slice(0, 3)}
                   </th>
                 ))}
               </tr>
@@ -103,7 +103,7 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
               {timeSlots.map((timeSlot, index) => (
                 <tr key={timeSlot} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                   {/* Time Column */}
-                  <td className="border border-gray-300 px-4 py-4 text-center font-bold text-sm bg-gray-100">
+                  <td className="border border-gray-300 px-1 py-2 text-center font-bold text-xs bg-gray-100">
                     {timeSlot}
                   </td>
                   
@@ -111,9 +111,9 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
                   {DAYS.map(day => {
                     const sections = getSectionsAtTime(day, timeSlot)
                     return (
-                      <td key={`${day}-${timeSlot}`} className="border border-gray-300 px-2 py-2 text-center align-top">
+                      <td key={`${day}-${timeSlot}`} className="border border-gray-300 px-1 py-1 text-center align-top">
                         {sections.length > 0 ? (
-                          <div className="text-xs leading-tight space-y-1">
+                          <div className="text-xs leading-tight space-y-0.5">
                             {sections.map((section, sectionIndex) => {
                               // Determine background color based on student preference
                               let bgColor = 'bg-white border-gray-200'
@@ -138,15 +138,16 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
                                   key={`${section.course_code}-${section.section_label}-${sectionIndex}`}
                                   className={`p-2 rounded border ${bgColor} mb-1`}
                                 >
-                                  <div className={`font-bold ${textColor}`}>{section.course_code}</div>
-                                  <div className={textColor}>Section {section.section_label}</div>
-                                  <div className={textColor}>Room {section.room}</div>
-                                  <div className={textColor}>
+                                  <div className={`font-bold ${textColor} text-xs`}>{section.course_code}</div>
+                                  <div className={`${textColor} text-xs`}>Group {section.section_label}</div>
+                                  <div className={`${textColor} text-xs`}>Sec {section.section_label}</div>
+                                  <div className={`${textColor} text-xs`}>R{section.room}</div>
+                                  {section.instructor_id && section.instructor_id !== 'TBA' && (
+                                    <div className={`${textColor} italic text-xs`}>{section.instructor_id}</div>
+                                  )}
+                                  <div className={`${textColor} text-xs`}>
                                     {formatTime12Hour(section.timeslot.start)} - {formatTime12Hour(section.timeslot.end)}
                                   </div>
-                                  {section.instructor_id && section.instructor_id !== 'TBA' && (
-                                    <div className={`${textColor} italic`}>{section.instructor_id}</div>
-                                  )}
                                   {section.is_student_preference === true && (
                                     <div className="text-xs text-green-700 font-semibold mt-1">
                                       ✓ Your Course
@@ -159,8 +160,8 @@ export function TimetableView({ schedule, title = "Class Timetable", studentInfo
                               )
                             })}
                             {sections.length > 1 && (
-                              <div className="text-xs text-blue-600 font-semibold mt-1">
-                                {sections.length} groups
+                              <div className="text-xs text-blue-600 font-semibold">
+                                {sections.length} grps
                               </div>
                             )}
                           </div>

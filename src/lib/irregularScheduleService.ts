@@ -302,6 +302,24 @@ export class IrregularScheduleService {
           course:courses(*)
         `)
         .eq('student_id', studentId)
+        .eq('semester', semester)
+
+      if (prefsError) {
+        console.error('Error fetching preferences:', prefsError)
+      } else {
+        console.log(`📋 Found ${preferences?.length || 0} preferences for student ${studentId} in semester ${semester}`)
+        if (preferences && preferences.length > 0) {
+          console.log('Selected course codes:', preferences.map(p => p.course?.code).filter(Boolean))
+          console.log('Selected course details:', preferences.map(p => ({
+            course_code: p.course?.code,
+            course_title: p.course?.title,
+            course_level: p.course?.level,
+            priority: p.priority
+          })))
+        } else {
+          console.log('⚠️ No preferences found - this might be why failed courses are not showing in schedule')
+        }
+      }
 
       // Get current level schedule
       const { data: levelSchedule, error: scheduleError } = await supabase
@@ -318,28 +336,72 @@ export class IrregularScheduleService {
         return null
       }
 
-      // Extract all sections from current level (we'll show them all for reference)
+      // Extract ONLY compulsory courses from current level
+      // Irregular students should only see compulsory courses, not electives from other groups
       const currentLevelSections: any[] = []
       const seenSections = new Set<string>() // Track unique sections to avoid duplicates
       
       if (levelSchedule && levelSchedule.groups) {
+        // Get all course codes from all groups
+        const allCourseCodes = new Set<string>()
         Object.values(levelSchedule.groups).forEach((group: any) => {
           (group as any).sections?.forEach((section: any) => {
-            // Create unique key for this section
-            const sectionKey = `${section.course_code}-${section.section_label}-${section.day}-${section.start_time}`
-            
-            // Only add if we haven't seen this section before
-            if (!seenSections.has(sectionKey)) {
-              seenSections.add(sectionKey)
-              currentLevelSections.push({
-                ...section,
-                level: student.level,
-                source: 'current_level',
-                course_level: student.level
-              })
-            }
+            allCourseCodes.add(section.course_code)
           })
         })
+        
+        // Fetch course details to check which are compulsory
+        const { data: coursesData, error: coursesError } = await supabase
+          .from('courses')
+          .select('code, title, course_type, credits, level')
+          .in('code', Array.from(allCourseCodes))
+          .eq('level', student.level)
+        
+        if (!coursesError && coursesData) {
+          // Create a map of course codes to their types
+          const courseTypeMap = new Map<string, string>()
+          const courseTitleMap = new Map<string, string>()
+          const courseCreditsMap = new Map<string, number>()
+          
+          coursesData.forEach((course: any) => {
+            courseTypeMap.set(course.code, course.course_type)
+            courseTitleMap.set(course.code, course.title)
+            courseCreditsMap.set(course.code, course.credits || 3)
+          })
+          
+          console.log(`📚 Found ${coursesData.length} courses for level ${student.level}`)
+          console.log(`📚 Compulsory courses:`, coursesData.filter((c: any) => c.course_type === 'compulsory').map((c: any) => c.code))
+          console.log(`📚 Elective courses:`, coursesData.filter((c: any) => c.course_type === 'elective').map((c: any) => c.code))
+          
+          // Now filter sections to only include compulsory courses
+          Object.values(levelSchedule.groups).forEach((group: any) => {
+            (group as any).sections?.forEach((section: any) => {
+              const courseType = courseTypeMap.get(section.course_code)
+              
+              // Only include compulsory courses
+              if (courseType === 'compulsory') {
+                // Create unique key for this section
+                const sectionKey = `${section.course_code}-${section.section_label}-${section.day}-${section.start_time}`
+                
+                // Only add if we haven't seen this section before
+                if (!seenSections.has(sectionKey)) {
+                  seenSections.add(sectionKey)
+                  currentLevelSections.push({
+                    ...section,
+                    course_title: courseTitleMap.get(section.course_code) || section.course_title,
+                    credits: courseCreditsMap.get(section.course_code) || section.credits || 3,
+                    level: student.level,
+                    source: 'current_level',
+                    course_level: student.level,
+                    course_type: 'compulsory'
+                  })
+                }
+              }
+            })
+          })
+          
+          console.log(`✅ Filtered to ${currentLevelSections.length} compulsory course sections for level ${student.level}`)
+        }
       }
 
       // Get sections for preference courses from their respective levels
@@ -364,6 +426,7 @@ export class IrregularScheduleService {
           if (!prefSchedError && preferenceSchedules) {
             // Get course codes that student selected as preferences
             const selectedCourseCodes = preferences.map((p: any) => p.course?.code).filter(Boolean)
+            console.log(`📋 Student selected ${selectedCourseCodes.length} preference courses:`, selectedCourseCodes)
             
             // Track unique preference sections
             const seenPreferenceSections = new Set<string>()
@@ -397,6 +460,16 @@ export class IrregularScheduleService {
                 })
               }
             })
+            
+            console.log(`✅ Found ${preferenceSections.length} total sections from preference levels`)
+            console.log(`✅ Student's selected preference sections:`, 
+              preferenceSections.filter(s => s.is_student_preference).map(s => ({
+                course: s.course_code,
+                level: s.course_level,
+                day: s.day,
+                time: `${s.start_time}-${s.end_time}`
+              }))
+            )
           }
         }
       }
